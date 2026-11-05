@@ -344,30 +344,6 @@ sudo python ghost-wifi.py wps -i wlan0mon --action scan
 sudo python ghost-wifi.py wps -i wlan0mon --bssid TARGET_BSSID --channel 6 --action pixie
 ```
 
----
-
-## Roadmap
-
-Improvements planned based on analysis of wifite2, airgeddon, fluxion, hcxtools, and bettercap:
-
-| Priority | Feature | Description |
-|----------|---------|-------------|
-| High | Auto-attack mode | `--auto` scans, identifies best attack vector per AP, runs it without manual steps |
-| High | MAC randomization | Auto-randomize MAC before each attack via macchanger; restore on exit |
-| High | Captive portal module | Python HTTP server serving a credential-harvesting login page for Evil Twin |
-| High | Hidden SSID de-cloaking | Send directed probe requests to reveal hidden ESSIDs from client probe history |
-| High | Deauth flood with channel awareness | Auto-read channel from scan results; no manual --channel needed |
-| High | wifite2 integration | Fallback to wifite2 when available, with JSON output parsing |
-| Medium | Signal strength tracking | Real-time power meter per AP during scan; show distance estimate |
-| Medium | EAPOL re-inject | Re-inject captured EAPOL frames to retry handshake without deauth |
-| Medium | Hash export formats | Auto-export to .hc22000, .hccapx, john format in one command |
-| Medium | Multi-interface support | Capture on one interface, inject on another simultaneously |
-| Medium | WPA3 SAE detection | Identify WPA3-only vs WPA3-transition mode networks; flag downgrade possibility |
-| Medium | 5GHz band support | Full channel list for 5GHz (36-165), auto-detect capable adapters |
-| Low | GPS integration | Tag each AP with GPS coordinates via gpsd integration |
-| Low | Report integration | Export scan/capture results to ghost-report JSON schema |
-| Low | pmkid batch mode | Attack all APs in a scan JSON sequentially with configurable per-AP timeout |
-
 ## Ghost Toolkit
 
 | Tool | Description |
