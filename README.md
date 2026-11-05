@@ -1,4 +1,8 @@
+<div align="center">
+
 # Ghost-WiFi
+
+[![Ghost-WiFi](https://img.shields.io/badge/Ghost--WiFi-WiFi%20Security-red?style=for-the-badge)](https://github.com/Ghost-Bx1/ghost-wifi)
 
 > WiFi attack framework - monitor mode, deauth, WPA/WPA2 handshake capture, PMKID, WPS Pixie Dust, Evil Twin, and cracking.
 
@@ -7,7 +11,7 @@
   By Gh0st-Bx1        |  github.com/Ghost-Bx1
 ```
 
-![Python](https://img.shields.io/badge/Python-3.7%2B-blue?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.7%2B-blue?style=flat-square&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey?style=flat-square)
 ![Category](https://img.shields.io/badge/Category-WiFi%20Security-red?style=flat-square)
 
