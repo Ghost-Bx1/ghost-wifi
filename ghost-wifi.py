@@ -36,7 +36,7 @@ R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
 B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
 W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
 
-VERSAO = "3.2.0"
+VERSAO = "3.3.0"
 
 
 def _build_banner():
@@ -3550,6 +3550,168 @@ def _dns_spoof_dnsspoof(args, iface, redirect_ip, domains):
         ok("DNS spoof stopped.")
 
 
+# ─── Module: live-scan (real-time AP dashboard) ───────────────────────────────
+
+def cmd_live_scan(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface. Run: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    refresh = getattr(args, "refresh", 2)
+    max_rows = getattr(args, "rows", 25)
+    band_flag = f"--band {args.band}" if getattr(args, "band", None) else ""
+    out_prefix = tempfile.mktemp(prefix="/tmp/ghostwifi_live_")
+    csv_file = f"{out_prefix}-01.csv"
+
+    info(f"Starting live AP dashboard on {mon}  (refresh: {refresh}s)  Ctrl+C to stop")
+    time.sleep(0.5)
+
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} {band_flag} --write {out_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+    # ANSI helpers
+    CLEAR  = "\033[2J\033[H"
+    UP     = "\033[A"
+    SAVE   = "\033[s"
+    LOAD   = "\033[u"
+    HIDE   = "\033[?25l"
+    SHOW   = "\033[?25h"
+
+    prev_count = 0
+    seen_bssids = {}  # bssid -> first_seen timestamp
+    history = {}      # bssid -> list of last 5 rssi values (for trend)
+
+    try:
+        sys.stdout.write(HIDE)
+        while True:
+            time.sleep(refresh)
+            if not os.path.exists(csv_file):
+                continue
+
+            aps, clients = _parse_airodump_csv(csv_file)
+            now = time.time()
+
+            # Track new APs and history
+            for ap in aps:
+                b = ap["bssid"].upper()
+                if b not in seen_bssids:
+                    seen_bssids[b] = now
+                try:
+                    rssi_v = int(ap["power"])
+                    history.setdefault(b, []).append(rssi_v)
+                    if len(history[b]) > 6:
+                        history[b].pop(0)
+                except:
+                    pass
+
+            sorted_aps = sorted(aps, key=lambda x: int(x["power"]) if x["power"].lstrip("-").isdigit() else -100, reverse=True)
+
+            # Build client count map
+            cli_map = {}
+            for cl in clients:
+                b = cl["bssid"].strip().upper()
+                cli_map[b] = cli_map.get(b, 0) + 1
+
+            # Clear screen and redraw
+            ts = datetime.now().strftime("%H:%M:%S")
+            lines = []
+            lines.append(f"{CLEAR}{W}  GHOST-WIFI LIVE SCAN{RST}  {DIM}[{mon}]{RST}  {C}{ts}{RST}  {DIM}refresh {refresh}s{RST}  {Y}{len(sorted_aps)} APs  {len(clients)} clients{RST}  {DIM}Ctrl+C to stop{RST}")
+            lines.append("")
+            lines.append(f"  {W}{'#':<4} {'BSSID':<19} {'CH':<4} {'SIG':<13} {'DIST':<9} {'ENC':<13} {'CLI':<5} {'TRD':<6} {'ESSID'}{RST}")
+            lines.append(f"  {DIM}{'-' * 100}{RST}")
+
+            display_aps = sorted_aps[:max_rows]
+            for i, ap in enumerate(display_aps, 1):
+                b = ap["bssid"].upper()
+                essid = ap.get("essid", "").strip()
+                if not essid:
+                    essid = f"{DIM}[hidden]{RST}"
+                ch = ap.get("channel", "?").strip()
+                enc = ap.get("privacy", "").strip()
+                pwr = ap.get("power", "?").strip()
+                bar = _signal_bar(pwr, width=8)
+                n_cli = cli_map.get(b, 0)
+                cli_str = f"{G}{n_cli}{RST}" if n_cli > 0 else f"{DIM}0{RST}"
+
+                try:
+                    rssi_v = int(pwr)
+                except:
+                    rssi_v = None
+                freq = _FREQ_MAP.get(ch, 2437)
+                d = _rssi_to_distance(rssi_v, freq_mhz=freq) if rssi_v else None
+                dl = _dist_label(d)
+                dc = _dist_color(d)
+
+                # Trend arrow from last 3 samples
+                hist = history.get(b, [])
+                if len(hist) >= 3:
+                    delta = hist[-1] - hist[-3]
+                    if delta > 2:
+                        trend = f"{G}↑{RST}"
+                    elif delta < -2:
+                        trend = f"{R}↓{RST}"
+                    else:
+                        trend = f"{DIM}={RST}"
+                else:
+                    trend = f"{DIM}~{RST}"
+
+                # Age indicator (NEW tag for first 10s)
+                age = now - seen_bssids.get(b, now)
+                new_tag = f" {G}NEW{RST}" if age < 10 else ""
+
+                # Encryption color
+                if "OPN" in enc or enc == "":
+                    ec = R
+                elif "SAE" in enc:
+                    ec = M
+                elif "WPA2" in enc:
+                    ec = Y
+                elif "WPA" in enc:
+                    ec = G
+                else:
+                    ec = W
+
+                lines.append(
+                    f"  {DIM}{i:<4}{RST}{b:<19} {ch:<4} {bar} {pwr:<6} "
+                    f"{dc}{dl:<9}{RST}{ec}{enc:<13}{RST}{cli_str:<5}  {trend}    {essid}{new_tag}"
+                )
+
+            if len(sorted_aps) > max_rows:
+                lines.append(f"  {DIM}... {len(sorted_aps) - max_rows} more APs (increase --rows to show){RST}")
+
+            lines.append("")
+            lines.append(f"  {DIM}Total seen: {len(seen_bssids)} unique APs  |  Associated clients: {sum(cli_map.values())}  |  Unassociated: {len(clients) - sum(cli_map.values())}{RST}")
+
+            sys.stdout.write("\n".join(lines))
+            sys.stdout.flush()
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write(SHOW + "\n")
+        proc.terminate()
+        proc.wait()
+        for f in Path("/tmp").glob("ghostwifi_live_*"):
+            try: f.unlink()
+            except: pass
+
+    print()
+    ok(f"Live scan ended. {len(seen_bssids)} unique APs seen.")
+    if args.output:
+        seen_list = [{"bssid": b, "first_seen": v} for b, v in seen_bssids.items()]
+        save_json({"unique_aps": seen_list, "total": len(seen_bssids)}, args.output)
+
+
 # ─── Built-in mini wordlist ───────────────────────────────────────────────────
 
 MINI_WORDLIST = [
@@ -3860,6 +4022,13 @@ def build_parser():
     ds.add_argument("--domains", help="Comma-separated domain(s) to spoof (default: * all)")
     ds.add_argument("--target", help="Target IP for ARP+DNS combined attack")
 
+    ls = sub.add_parser("live-scan", help="Real-time AP dashboard with signal trend, distance and client count")
+    ls.add_argument("-i", "--interface", help="Monitor interface (auto-detect if omitted)")
+    ls.add_argument("--refresh", type=int, default=2, help="Refresh interval in seconds (default: 2)")
+    ls.add_argument("--rows", type=int, default=25, help="Max APs to display (default: 25)")
+    ls.add_argument("--band", choices=["a", "b", "abg"], help="Band filter")
+    ls.add_argument("-o", "--output", help="Save unique AP list to JSON on exit")
+
     return p
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -3898,6 +4067,7 @@ COMMANDS = {
     "radar":           cmd_radar,
     "distance":        cmd_distance,
     # v3.2.0 - advanced modules
+    "live-scan":       cmd_live_scan,
     "wifi-map":        cmd_wifi_map,
     "channel-survey":  cmd_channel_survey,
     "ap-watch":        cmd_ap_watch,
