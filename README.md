@@ -4,10 +4,10 @@
 
 [![Ghost-WiFi](https://img.shields.io/badge/Ghost--WiFi-WiFi%20Security-red?style=for-the-badge)](https://github.com/Ghost-Bx1/ghost-wifi)
 
-> WiFi attack and audit framework - 27 modules: monitor mode, deauth, WPA/WPA2 handshake, PMKID, WPS, Evil Twin, cracking, radar/distance mapping, and more.
+> WiFi attack and audit framework - 38 modules: monitor mode, deauth, WPA/WPA2 handshake, PMKID, WPS, Evil Twin, cracking, radar/distance mapping, ARP MITM, DNS spoofing, and more.
 
 ```
-  GHOST-WIFI  v3.1.0  |  WiFi Attack & Audit Framework
+  GHOST-WIFI  v3.2.0  |  WiFi Attack & Audit Framework
   By Gh0st-Bx1        |  github.com/Ghost-Bx1
 ```
 
@@ -56,6 +56,15 @@ Ghost-WiFi is a comprehensive WiFi attack and audit framework. Zero pip dependen
 | `5ghz-scan`      | Dedicated 5GHz band scan                                       |
 | `radar`          | WiFi radar: ASCII map of all APs sorted by estimated distance  |
 | `distance`       | Quick RSSI-to-distance scan of all visible networks            |
+| `wifi-map`       | ASCII topology map: APs with associated clients tree           |
+| `channel-survey` | 2.4GHz/5GHz channel utilization chart + congestion hints       |
+| `ap-watch`       | Live monitor for AP appearance/disappearance events            |
+| `pcap-analyze`   | Analyze .cap/.pcap: handshakes, PMKIDs, frame stats            |
+| `pmkid-crack`    | All-in-one pipeline: hcxdumptool -> hcxpcapngtool -> hashcat   |
+| `deauth-detect`  | Passive detection of deauthentication storm attacks            |
+| `arp-mitm`       | ARP poisoning MITM with bidirectional arpspoof + tcpdump dump  |
+| `handshake-hunt` | Automated multi-AP handshake collector with deauth bursts      |
+| `dns-spoof`      | DNS spoofing via bettercap caplet or dnsspoof hosts file       |
 
 ---
 
