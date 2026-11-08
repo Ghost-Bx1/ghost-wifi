@@ -8,6 +8,7 @@ import argparse
 import http.server
 import io
 import json
+import math
 import os
 import random
 import re
@@ -35,7 +36,7 @@ R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
 B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
 W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
 
-VERSAO = "3.0.0"
+VERSAO = "3.1.0"
 
 
 def _build_banner():
@@ -101,6 +102,7 @@ def _build_banner():
         f"{D}wps  evil-twin  crack  wep  clients  karma  auto{X}",
         f"{D}decloak  eapol  signal  handshake  nic-detect  info{X}",
         f"{D}beacon-flood  probe-hunt  mdk4  portal{X}",
+        f"{D}radar  distance{X}",
     ]
 
     out = [f"{Gc}{TL}{eq}{TR}{X}", f"{Gc}{VB}{sp}{VB}{X}"]
@@ -1600,8 +1602,10 @@ def cmd_signal(args):
                 ts = datetime.now().strftime("%H:%M:%S")
                 bar_len = max(0, min(40, int((val + 100) * 0.8)))
                 bar = f"{G}{'|' * bar_len}{RST}{'.' * (40 - bar_len)}"
-                print(f"\r  {ts}  {bssid}  [{bar}] {val:.1f} dBm   ", end="", flush=True)
-                readings.append({"time": ts, "signal": val})
+                dist = _rssi_to_distance(val)
+                dist_str = f"~{dist:.0f}m" if dist is not None else "?m"
+                print(f"\r  {ts}  {bssid}  [{bar}] {val:.1f} dBm  {dist_str}   ", end="", flush=True)
+                readings.append({"time": ts, "signal": val, "distance_m": dist})
             time.sleep(interval)
     except KeyboardInterrupt:
         pass
@@ -1611,7 +1615,9 @@ def cmd_signal(args):
         avg = sum(r["signal"] for r in readings) / len(readings)
         mn = min(r["signal"] for r in readings)
         mx = max(r["signal"] for r in readings)
-        ok(f"Signal stats - Avg: {avg:.1f} dBm  Min: {mn:.1f}  Max: {mx:.1f}  Samples: {len(readings)}")
+        avg_dist = _rssi_to_distance(avg)
+        dist_info = f"  Est. distance: ~{avg_dist:.0f}m" if avg_dist else ""
+        ok(f"Signal stats - Avg: {avg:.1f} dBm  Min: {mn:.1f}  Max: {mx:.1f}  Samples: {len(readings)}{dist_info}")
         if args.output:
             save_json({"bssid": bssid, "readings": readings, "avg": avg, "min": mn, "max": mx}, args.output)
     else:
@@ -2347,6 +2353,249 @@ def cmd_injection_test(args):
         info(f"Driver: {drv} -> {chipset}")
 
 
+# ─── Distance estimation helpers ─────────────────────────────────────────────
+
+_FREQ_MAP = {
+    "1": 2412, "2": 2417, "3": 2422, "4": 2427, "5": 2432,
+    "6": 2437, "7": 2442, "8": 2447, "9": 2452, "10": 2457,
+    "11": 2462, "12": 2467, "13": 2472, "14": 2484,
+    "36": 5180, "40": 5200, "44": 5220, "48": 5240, "52": 5260,
+    "56": 5280, "60": 5300, "64": 5320, "100": 5500, "104": 5520,
+    "108": 5540, "112": 5560, "116": 5580, "120": 5600, "124": 5620,
+    "128": 5640, "132": 5660, "136": 5680, "140": 5700, "149": 5745,
+    "153": 5765, "157": 5785, "161": 5805, "165": 5825,
+}
+
+def _rssi_to_distance(rssi, freq_mhz=2437, tx_power=-50, n=2.7):
+    """Estimate distance (meters) from RSSI using Log Distance Path Loss model.
+    n: path loss exponent - 2.0 free space, 2.7 typical indoor, 3.5 obstructed"""
+    if rssi is None or rssi >= 0:
+        return None
+    try:
+        return round(10 ** ((tx_power - float(rssi)) / (10 * n)), 1)
+    except Exception:
+        return None
+
+def _dist_label(d):
+    if d is None:
+        return "?m"
+    if d < 1:
+        return "<1m"
+    if d < 1000:
+        return f"~{d:.0f}m"
+    return f"~{d / 1000:.1f}km"
+
+def _dist_color(d):
+    if d is None:
+        return DIM
+    if d < 15:
+        return G
+    if d < 50:
+        return Y
+    return R
+
+
+# ─── Module: radar (WiFi distance mapper) ────────────────────────────────────
+
+def cmd_radar(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface. Run: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    duration = args.duration or 20
+    band_flag = f"--band {args.band}" if getattr(args, "band", None) else ""
+    out_prefix = tempfile.mktemp(prefix="/tmp/ghostwifi_radar_")
+    n_exp = getattr(args, "path_n", 2.7)
+    tx_ref = getattr(args, "tx_power", -50)
+
+    info(f"Scanning {duration}s on {mon} to build WiFi radar map...")
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} {band_flag} --write {out_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        time.sleep(duration)
+    finally:
+        proc.terminate()
+        proc.wait()
+
+    csv_file = f"{out_prefix}-01.csv"
+    if not os.path.exists(csv_file):
+        err(f"No scan output found.")
+        return
+
+    aps, _ = _parse_airodump_csv(csv_file)
+    for f in Path("/tmp").glob("ghostwifi_radar_*"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+    if not aps:
+        warn("No APs found in scan.")
+        return
+
+    enriched = []
+    for ap in aps:
+        ch = ap.get("channel", "6").strip()
+        freq = _FREQ_MAP.get(ch, 2437)
+        try:
+            rssi = int(ap.get("power", "-100"))
+        except Exception:
+            rssi = -100
+        d = _rssi_to_distance(rssi, freq_mhz=freq, tx_power=tx_ref, n=n_exp)
+        enriched.append({**ap, "distance": d, "rssi": rssi})
+
+    enriched.sort(key=lambda x: x["distance"] if x["distance"] is not None else 99999)
+    top = getattr(args, "top", None)
+    if top:
+        enriched = enriched[:top]
+
+    print()
+    print(f"  {W}{'GHOST-WIFI RADAR':^78}{RST}")
+    print(f"  {DIM}WiFi Distance Map  |  Log Distance Path Loss (n={n_exp:.1f}, TxRef={tx_ref}dBm){RST}")
+    print(f"  {DIM}Distances are estimates - accuracy varies by environment{RST}")
+    print()
+    hdr = f"  {'DIST':<8} {'SIG':<14} {'BSSID':<19} {'CH':<4} {'ENC':<12} {'ESSID'}"
+    print(f"  {W}{hdr.strip()}{RST}")
+    print("  " + "-" * 80)
+
+    for ap in enriched:
+        d = ap.get("distance")
+        rssi = ap.get("rssi", -100)
+        dc = _dist_color(d)
+        dl = _dist_label(d)
+        bar = _signal_bar(str(rssi), width=10)
+        rssi_str = f"{rssi:>5}dBm"
+        enc = ap.get("privacy", "").strip()
+        if not enc or "OPN" in enc:
+            ec = R
+        elif "SAE" in enc or "WPA3" in enc.upper():
+            ec = M
+        elif "WPA" in enc:
+            ec = G
+        else:
+            ec = Y
+        essid = ap.get("essid", "").strip()
+        hidden = f"{DIM}[hidden]{RST}" if not essid else essid
+        bssid = ap.get("bssid", "").strip()
+        ch = ap.get("channel", "?").strip()
+        print(f"  {dc}{dl:<8}{RST} {bar} {rssi_str} {bssid:<19} {ch:<4} {ec}{enc:<12}{RST} {hidden}")
+
+    print()
+    ok(f"Radar: {len(enriched)} networks mapped")
+
+    distances = [ap["distance"] for ap in enriched if ap["distance"] is not None]
+    if distances:
+        close = sum(1 for d in distances if d < 15)
+        medium = sum(1 for d in distances if 15 <= d < 50)
+        far = sum(1 for d in distances if d >= 50)
+        print(f"  {G}Close <15m: {close:<4}{RST}  {Y}Medium 15-50m: {medium:<4}{RST}  {R}Far >50m: {far}{RST}")
+    print()
+
+    if args.output:
+        for e in enriched:
+            e["distance_label"] = _dist_label(e["distance"])
+        save_json({"radar": enriched, "scan_time": datetime.now().isoformat(), "n": n_exp, "tx_ref": tx_ref}, args.output)
+
+
+# ─── Module: distance (quick one-shot distance scan) ─────────────────────────
+
+def cmd_distance(args):
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("iw")
+    mon = args.interface
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("No monitor interface. Run: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    n_exp = getattr(args, "path_n", 2.7)
+    tx_ref = getattr(args, "tx_power", -50)
+    bssid_filter = getattr(args, "bssid", None)
+
+    info(f"Quick distance scan on {mon} (n={n_exp}, TxRef={tx_ref}dBm)...")
+    out, _, _ = run(f"iw dev {mon} scan flush 2>/dev/null")
+
+    # Parse iw scan output into AP records
+    aps = []
+    current = {}
+    for line in out.splitlines():
+        line = line.strip()
+        m_bss = re.match(r"BSS ([\da-f:]+)", line, re.IGNORECASE)
+        if m_bss:
+            if current.get("bssid"):
+                aps.append(current)
+            current = {"bssid": m_bss.group(1).upper(), "essid": "", "signal": -100, "freq": 2437, "enc": "?"}
+        elif current:
+            m_sig = re.match(r"signal:\s*([-\d.]+)", line)
+            if m_sig:
+                current["signal"] = float(m_sig.group(1))
+            m_ssid = re.match(r"SSID:\s*(.*)", line)
+            if m_ssid:
+                current["essid"] = m_ssid.group(1).strip()
+            m_freq = re.match(r"freq:\s*(\d+)", line)
+            if m_freq:
+                current["freq"] = int(m_freq.group(1))
+            if re.search(r"RSN:|WPA:", line):
+                current["enc"] = "WPA"
+            elif re.search(r"Privacy", line):
+                current["enc"] = "WEP"
+            elif re.search(r"ESS", line) and current.get("enc") == "?":
+                current["enc"] = "OPN"
+    if current.get("bssid"):
+        aps.append(current)
+
+    if bssid_filter:
+        aps = [a for a in aps if a["bssid"].upper() == bssid_filter.upper()]
+
+    if not aps:
+        warn("No networks found. Is the interface in monitor or managed mode?")
+        return
+
+    aps.sort(key=lambda x: x["signal"], reverse=True)
+
+    print()
+    print(f"  {W}GHOST-WIFI DISTANCE SCAN{RST}  {DIM}(Log Distance Path Loss, n={n_exp}){RST}")
+    print()
+    print(f"  {W}{'DIST':<10} {'RSSI':<10} {'BSSID':<20} {'FREQ':<8} {'ENC':<6} ESSID{RST}")
+    print("  " + "-" * 72)
+
+    results = []
+    for ap in aps:
+        rssi = ap["signal"]
+        freq = ap.get("freq", 2437)
+        d = _rssi_to_distance(rssi, freq_mhz=freq, tx_power=tx_ref, n=n_exp)
+        dc = _dist_color(d)
+        dl = _dist_label(d)
+        enc = ap.get("enc", "?")
+        ec = R if enc == "OPN" else (M if "WPA3" in enc else (G if "WPA" in enc else Y))
+        essid = ap.get("essid", "") or f"{DIM}[hidden]{RST}"
+        bssid = ap.get("bssid", "")
+        freq_str = f"{freq}MHz"
+        print(f"  {dc}{dl:<10}{RST} {rssi:>+6.0f}dBm  {bssid:<20} {freq_str:<8} {ec}{enc:<6}{RST} {essid}")
+        results.append({**ap, "distance_m": d, "distance_label": dl})
+
+    print()
+    ok(f"Distance scan: {len(aps)} networks found")
+    print()
+
+    if args.output:
+        save_json({"distance_scan": results, "n": n_exp, "tx_ref": tx_ref, "scan_time": datetime.now().isoformat()}, args.output)
+
+
 # ─── Built-in mini wordlist ───────────────────────────────────────────────────
 
 MINI_WORDLIST = [
@@ -2571,6 +2820,26 @@ def build_parser():
     fg.add_argument("-i", "--interface", required=True)
     fg.add_argument("--duration", type=int, default=30)
 
+    # radar
+    rd = sub.add_parser("radar", help="WiFi radar: map all APs with estimated distance (RSSI-based)")
+    rd.add_argument("-i", "--interface", help="Monitor-mode interface (auto-detect if omitted)")
+    rd.add_argument("--duration", type=int, default=20, help="Scan duration in seconds (default: 20)")
+    rd.add_argument("--band", choices=["a", "b", "abg", "abgn"], help="Frequency band to scan")
+    rd.add_argument("--top", type=int, help="Show only N closest networks")
+    rd.add_argument("--path-n", dest="path_n", type=float, default=2.7,
+                    help="Path loss exponent: 2.0=free space, 2.7=indoor, 3.5=obstructed (default: 2.7)")
+    rd.add_argument("--tx-power", dest="tx_power", type=float, default=-50,
+                    help="Reference TX power at 1m in dBm (default: -50)")
+
+    # distance
+    di = sub.add_parser("distance", help="Quick RSSI-to-distance scan of all visible networks")
+    di.add_argument("-i", "--interface", help="Wireless interface (auto-detect if omitted)")
+    di.add_argument("--bssid", help="Filter by specific BSSID")
+    di.add_argument("--path-n", dest="path_n", type=float, default=2.7,
+                    help="Path loss exponent (default: 2.7)")
+    di.add_argument("--tx-power", dest="tx_power", type=float, default=-50,
+                    help="Reference TX power at 1m in dBm (default: -50)")
+
     return p
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -2605,6 +2874,9 @@ COMMANDS = {
     "injection-test":  cmd_injection_test,
     "channelfix":      cmd_channelfix,
     "5ghz-scan":       cmd_5ghz_scan,
+    # v3.1.0 - DEDSEC_WI-FIDAR inspired
+    "radar":           cmd_radar,
+    "distance":        cmd_distance,
 }
 
 def main():
