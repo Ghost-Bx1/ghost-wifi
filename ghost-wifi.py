@@ -4094,17 +4094,78 @@ MINI_WORDLIST = [
 
 # ─── Argument Parser ──────────────────────────────────────────────────────────
 
+_WIFI_HELP = """\033[92mComandos disponiveis:\033[0m
+
+  \033[1mifaces\033[0m            Lista interfaces wireless disponíveis
+  \033[1mmonitor\033[0m           Ativa/desativa modo monitor na interface
+  \033[1mscan\033[0m              Escaneia redes WiFi proximas
+  \033[1mhop\033[0m               Rotacao de canais no modo monitor
+  \033[1mdeauth\033[0m            Envia frames de desautenticacao (DoS)
+  \033[1mcapture\033[0m           Captura handshake WPA/WPA2 4-way
+  \033[1mpmkid\033[0m             Ataque PMKID sem cliente
+  \033[1mwps\033[0m               Ataques WPS: Pixie Dust e PIN brute-force
+  \033[1mevil-twin\033[0m         Cria AP rogue / Evil Twin com captive portal
+  \033[1mcrack\033[0m             Quebra handshake (aircrack-ng ou hashcat)
+  \033[1mwep\033[0m               Ataque WEP: ARP replay, frag, chopchop
+  \033[1mclients\033[0m           Rastreia e loga clientes conectados
+  \033[1mkarmA\033[0m             Ataque KARMA - responde a todos os probes
+  \033[1mhandshake\033[0m         Ferramentas de handshake: verify/convert/strip
+  \033[1minfo\033[0m              Verifica dependencias instaladas
+  \033[1mauto\033[0m              Cadeia automatizada scan->deauth->captura
+  \033[1mdecloak\033[0m           Detecta SSIDs ocultos via trafego de probe
+  \033[1meapol\033[0m             Reinjecao de frames EAPOL de arquivo .cap
+  \033[1msignal\033[0m            Rastreia intensidade de sinal de um AP
+  \033[1mnic-detect\033[0m        Analise de NIC: chipset, bandas, injecao, TX
+  \033[1mbeacon-flood\033[0m      Flood com beacons de APs falsos
+  \033[1mprobe-hunt\033[0m        Captura probe requests e mapeia dispositivos
+  \033[1mcaptive-portal\033[0m    Portal HTTP standalone para captura de credenciais
+  \033[1mmdk4\033[0m              Wrapper MDK4: beacon/deauth/auth-DoS/probe/EAPOL
+  \033[1mfingerprint\033[0m       Fingerprint APs e clientes com OUI lookup
+  \033[1minjection-test\033[0m    Testa capacidade de injecao na interface
+  \033[1mchannelfix\033[0m        Forca canal especifico na interface
+  \033[1m5ghz-scan\033[0m         Scan dedicado na banda 5GHz
+  \033[1mradar\033[0m             Mapa de APs com distancia estimada (RSSI)
+  \033[1mdistance\033[0m          Scan RSSI-to-distance de redes visiveis
+  \033[1mwifi-map\033[0m          Mapa topologico ASCII de APs e clientes
+  \033[1mchannel-survey\033[0m    Grafico de utilizacao de canais 2.4/5GHz
+  \033[1map-watch\033[0m          Monitora aparecimento/desaparecimento de APs
+  \033[1mpcap-analyze\033[0m      Analisa .cap/.pcap para handshakes e PMKIDs
+  \033[1mpmkid-crack\033[0m       Pipeline completo PMKID captura->converter->crack
+  \033[1mdeauth-detect\033[0m     Deteccao passiva de ataques de desautenticacao
+  \033[1marp-mitm\033[0m          ARP poisoning MITM entre alvo e gateway
+  \033[1mhandshake-hunt\033[0m    Coletador automatizado de handshakes multi-AP
+  \033[1mdns-spoof\033[0m         DNS spoofing via bettercap ou dnsspoof
+  \033[1mlive-scan\033[0m         Dashboard em tempo real de APs
+  \033[1mrouter-brute\033[0m      Brute-force HTTP em painel admin de roteador
+  \033[1misp-scan\033[0m          Detecta ISP/roteador BR por padroes de SSID
+
+\033[92mExemplos:\033[0m
+  python ghost-wifi.py ifaces
+  python ghost-wifi.py scan -i wlan0mon --duration 20
+  python ghost-wifi.py deauth -i wlan0mon --bssid AA:BB:CC:DD:EE:FF
+  python ghost-wifi.py capture -i wlan0mon --bssid AA:BB:CC:DD:EE:FF --channel 6
+  python ghost-wifi.py crack --cap handshake.cap --wordlist wordlist.txt
+  python ghost-wifi.py auto -i wlan0mon --mac-rand
+  python ghost-wifi.py router-brute --wordlist senhas.txt --threads 10
+  python ghost-wifi.py live-scan -i wlan0mon
+
+\033[2mUse: python ghost-wifi.py <comando> --help  para opcoes de cada comando\033[0m
+"""
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="ghost-wifi",
-        description="Ghost-WiFi - WiFi Attack & Audit Framework",
+        description="Ghost-WiFi v3.4.0 - WiFi Attack & Audit Framework  |  By Gh0st-Bx1",
+        epilog=_WIFI_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--no-banner", action="store_true")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("-o", "--output", help="Save output to JSON/file")
 
-    sub = p.add_subparsers(dest="command", required=True)
+    sub = p.add_subparsers(dest="command", required=True,
+                           title=argparse.SUPPRESS, metavar="comando")
 
     # ifaces
     sub.add_parser("ifaces", help="List wireless interfaces")
